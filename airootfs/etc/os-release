@@ -1,0 +1,10 @@
+NAME="SimulationOS"
+PRETTY_NAME="SimulationOS"
+ID=arch
+BUILD_ID=rolling
+ANSI_COLOR="38;2;23;147;209"
+HOME_URL="https://github.com/HaiderBassem/SimulationOS"
+DOCUMENTATION_URL="https://github.com/HaiderBassem/SimulationOS/blob/main/README.md"
+SUPPORT_URL="https://github.com/HaiderBassem/SimulationOS"
+BUG_REPORT_URL="https://github.com/HaiderBassem/SimulationOS/issues"
+LOGO=SimulationOS

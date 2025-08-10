@@ -27,3 +27,4 @@ cat >/etc/pacman.d/mirrorlist <<EOF
 
 Server = ${mirror%%/}/\$repo/os/\$arch
 EOF
+
