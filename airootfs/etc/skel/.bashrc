@@ -5,27 +5,32 @@
 # If not running interactively, don't do anything
 [[ $- != *i* ]] && return
 
+# Change the window title
+PS1='[\u@\h \W]\$ '
+
 [ -r /usr/share/bash-completion/bash_completion ] && . /usr/share/bash-completion/bash_completion
 
-# Change the window title of X terminals
-case ${TERM} in
-    xterm*|rxvt*|Eterm*|aterm|kterm|gnome*|interix|konsole*)
-        PROMPT_COMMAND='echo -ne "\033]0;${USER}@${HOSTNAME%%.*}:${PWD/#$HOME/\~}\007"'
-        ;;
-    screen*)
-        PROMPT_COMMAND='echo -ne "\033_${USER}@${HOSTNAME%%.*}:${PWD/#$HOME/\~}\033\\"'
-        ;;
-esac
+# Export
+export EDITOR='nvim'
+export VISUAL='nvim'
+export HISTCONTROL=ignoreboth:erasedups
+
+#ignore upper and lowercase when TAB completion
+bind "set completion-ignore-case on"
+
 #system
-alias edital='nvim ~/.config/fish/config.fish'
-alias applyal='source ~/.config/fish/config.fish'
+alias edital='$EDITOR ~/.bashrc'
+alias applyal='source ~/.bashrc'
 alias please='sudo'
 
-alias ls='ls --color=auto'
-alias la='ls -a'
-alias ll='ls -la'
-alias l='ls'
-alias l.="ls -A | egrep '^\.'"
+
+
+alias l='eza --color=always --group-directories-first --icons'
+alias l.='eza -a | grep -e '\''^\.'\'''
+alias la='eza -al --color=always --group-directories-first --icons'
+alias ll='eza -l --color=always --group-directories-first --icons'
+alias ls='eza -a --color=always --group-directories-first --icons'
+alias lt='eza -aT --color=always --group-directories-first --icons'
 alias grep='grep --colour=auto'
 alias egrep='egrep --colour=auto'
 alias fgrep='fgrep --colour=auto'
@@ -37,7 +42,9 @@ alias ex="exit"
 alias fs="fastfetch"
 alias nv='nvidia-smi'
 alias ..='cd ..'
-alias ll='ls -lah'
+alias ...='cd ../..'
+alias ....='cd ../../..'
+alias .....='cd ../../../..'
 
 
 # git
@@ -57,15 +64,47 @@ alias gpr='git pull --rebase'
 #newtworks
 alias ports='netstat -tulanp'
 
+#pacman
+alias belong='sudo pacman -Qo'
+alias in='sudo pacman -S'
+alias qu='sudo pacman -Sii'
+alias re='sudo pacman -Rs'
+alias search='pacman -Ss'
+alias up='sudo pacman -Syyu'
+
+#etc
+alias kernel='ls /usr/lib/modules'
+alias kernels='ls /usr/lib/modules'
+alias rm='trash-put'
+alias snapchome='sudo snapper -c home create-config /home'
+alias snapcroot='sudo snapper -c root create-config /'
+alias sound='pavucontrol'
 
 
-
-
-
-
-
-# show sizes in MB
-PS1='[\u@\h \W]\$ '
+ex ()
+{
+  if [ -f $1 ] ; then
+    case $1 in
+      *.tar.bz2)   tar xjf $1   ;;
+      *.tar.gz)    tar xzf $1   ;;
+      *.bz2)       bunzip2 $1   ;;
+      *.rar)       unrar x $1   ;;
+      *.gz)        gunzip $1    ;;
+      *.tar)       tar xf $1    ;;
+      *.tbz2)      tar xjf $1   ;;
+      *.tgz)       tar xzf $1   ;;
+      *.zip)       unzip $1     ;;
+      *.Z)         uncompress $1;;
+      *.7z)        7z x $1      ;;
+      *.deb)       ar x $1      ;;
+      *.tar.xz)    tar xf $1    ;;
+      *.tar.zst)   tar xf $1    ;;
+      *)           echo "'$1' cannot be extracted via ex()" ;;
+    esac
+  else
+    echo "'$1' is not a valid file"
+  fi
+}
 
 # Bash won't get SIGWINCH if another process is in the foreground.
 # Enable checkwinsize so that bash will check the terminal size when
@@ -73,12 +112,14 @@ PS1='[\u@\h \W]\$ '
 # http://cnswww.cns.cwru.edu/~chet/bash/FAQ (E11)
 shopt -s checkwinsize
 
-shopt -s expand_aliases
+#beautiful stuff
+shopt -s autocd # change to named directory
+shopt -s cdspell # autocorrects cd misspellings
+shopt -s cmdhist # save multi-line commands in history as single line
+shopt -s dotglob
+shopt -s histappend # do not overwrite history
+shopt -s expand_aliases # expand aliases
 
-# export QT_SELECT=4
-
-# Enable history appending instead of overwriting.  #139609
-shopt -s histappend
 
 
 #fastfetch
