@@ -1,0 +1,369 @@
+{
+    // -------------------------------------------------------------------------
+    // Global configuration with hover groups
+    // -------------------------------------------------------------------------
+
+    "layer": "top",
+    "position": "top",
+    "margin-left": 10,
+    "margin-bottom": 0,
+    "margin-right": 10,
+    "spacing": 5,
+
+    "modules-left": [
+        "hyprland/workspaces",
+//        "hyprland/window",
+        "custom/spotify",
+        "custom/cava"
+    ],
+    "modules-center": [
+        "group/clock",
+    ],
+    "modules-right": [
+        "group/hardware",
+        "group/system", 
+        "group/power",
+        //"custom/electricity",
+        "pulseaudio",
+        "network",
+        "tray"
+    ],
+
+    // -------------------------------------------------------------------------
+    // Groups configuration for hover functionality
+    // -------------------------------------------------------------------------
+
+
+  "group/clock":{
+
+  "orientation": "horizontal",
+  "drawer": {
+    "transition-duration": 300,
+    "children-class": "clock-weather-child",
+    "transition-left-to-right": false
+    },
+  "modules": [
+    "clock",
+    //"custom/weather",
+    "temperature",
+    "clock#2"
+  ]
+  },
+
+  "group/power": {
+    "orientation": "horizontal",
+    "drawer": {
+        "transition-duration": 300,
+        "children-class": "power-child",
+        "transition-left-to-right": false
+    },
+    "modules": [
+        "battery",
+        "custom/network_traffic",
+        "custom/electricity"
+    ]
+},
+
+  "group/network": {
+    "orientation": "horizontal",
+    "drawer": {
+        "transition-duration": 300,
+        "children-class": "power-child",
+        "transition-left-to-right": false
+    },
+    "modules": [
+    ]
+},
+
+    "group/hardware": {
+        "orientation": "horizontal",
+        "drawer": {
+            "transition-duration": 300,
+            "children-class": "hardware-child",
+            "transition-left-to-right": false
+        },
+        "modules": [
+            "custom/cpufreq",
+            "custom/cpu-temp",
+            "custom/gpu-temp",
+            "custom/gamemode"
+        ]
+    },
+
+    "group/system": {
+        "orientation": "horizontal",
+        "drawer": {
+            "transition-duration": 300,
+            "children-class": "system-child",
+            "transition-left-to-right": false
+        },
+        "modules": [
+            "memory",
+            "custom/network_traffic",
+            "custom/recorder",
+            "cpu",
+            "custom/storage"
+        ]
+    },
+
+    // -------------------------------------------------------------------------
+    // Individual module configurations
+    // -------------------------------------------------------------------------
+    "hyprland/window": {
+        "format": "{}",
+	"icon":true,
+	"icon-size" : 20
+    },
+     "custom/network_traffic": {
+             "exec": "~/.config/waybar/modules/network_traffic.sh",
+             "return-type": "json",
+             "format-ethernet": "{icon} {ifname} ⇣{bandwidthDownBytes} ⇡{bandwidthUpBytes}",    // optional
+},
+		"custom/cava": {
+				"format": "{}",
+				"exec": "~/.config/waybar/modules/cava.sh"
+			},
+
+    "custom/gamemode": {
+        "format": "{}",
+        "return-type": "",
+        "interval": 2,
+        "exec": "~/.config/waybar/modules/gamemode.sh status 2>/dev/null",
+        "on-click": "~/.config/waybar/modules/gamemode.sh toggle 2>/dev/null",
+        "signal": 8,
+        "max-length": 10,
+        "escape": true
+    },
+
+    "custom/cpu-temp": {
+        "exec": "~/.config/waybar/modules/cpu-temp.sh",
+        "return-type": "json",
+        "interval": 5,
+        "format": "{}",
+        "on-click": "sensors",
+        "on-click-right": "kitty -e watch -n 1 sensors"
+    },
+
+    "custom/gpu-temp": {
+        "exec": "~/.config/waybar/modules/gpu-temp.sh",
+        "return-type": "json",
+        "interval": 5,
+        "format": "{}",
+        "on-click": "nvidia-smi",
+        "on-click-right": "kitty -e watch -n 1 nvidia-smi"
+    },
+
+    "memory": {
+        "interval": 30,
+        "format": "   {used:0.2f} / {total:0.0f} GB",
+        "on-click": "kitty -e btop"
+    },
+
+    "cpu": {
+        "interval": 1,
+    "format": "  {max_frequency}GHz <span color=\"#666666\">| {usage:2}%</span>",
+        "format-alt": " <span color=\"#a6e3a1\">{usage:2}%</span>",
+        "max-length": 13,
+        "min-length": 13,
+        "tooltip": true,
+        "tooltip-format": "CPU Usage: {usage}%\nFrequency: {max_frequency}GHz\nLoad: {load}"
+    },
+
+    "custom/storage": {
+        "format": " {}",
+        "format-alt": "{percentage}% ",
+        "format-alt-click": "click-right",
+        "return-type": "json",
+        "interval": 60,
+        "exec": "~/.config/waybar/modules/storage.sh"
+    },
+
+    "disk": {
+        "interval": 30,
+        "format": " {percentage_used}%",
+        "path": "/"
+    },
+
+    "custom/cpufreq": {
+        "exec": "~/.config/waybar/modules/cpufreq.sh",
+        "interval": 10,
+        "format": "{}",
+        "on-click": "~/.config/waybar/modules/cpufreq.sh toggle",
+        "on-click-right": "~/.config/waybar/modules/refresh-rate.sh toggle",
+        "on-click-middle": "~/.config/waybar/modules/cpufreq.sh reset",
+        "tooltip": true,
+        "tooltip-format": "CPU Governor\nLeft-click: Change Current Mode ⚡\nRight-click: Change Refresh Rate 🔋\nMiddle-click: Reset"
+    },
+
+    "battery": {
+        "interval": 2,
+        "states": {
+            "good": 95,
+            "warning": 30,
+            "critical": 15 
+        },
+        "format": "{icon} {capacity}%",
+        "format-charging": " {capacity}%", 
+        "format-plugged": " {capacity}%",
+        "format-icons": ["", "", "", "", "" ],
+        },
+
+    "custom/electricity": {
+        "interval": 2,
+        "exec": "~/.config/waybar/modules/power_monitor.sh",
+        "format": "⚡ {}",
+        "tooltip": true,
+        "on-click": "kitty --class 'Power Details' \"$(~/.config/waybar/modules/power_details.sh)\"",
+        "on-click-right": "kitty --class 'System Power' \"$(~/.config/waybar/modules/system_power.sh)\"",
+        "return-type": "json"
+    },
+
+    "network": {
+        "format-wifi": " {essid} ({signalStrength}%)",
+        "format-ethernet": "󰲝 ",
+        "format-linked": "{ifname} (No IP) ",
+        "format": "",
+        "format-disconnected": "󰲜",
+        "format-alt": "{ifname}: {ipaddr}/{cidr}  ",
+        "on-click": "wl-copy $(ip address show up scope global | grep inet | head -n1 | cut -d/ -f 1 | tr -d [:space:] | cut -c5-)",
+        "on-click-right": "wl-copy $(ip address show up scope global | grep inet6 | head -n1 | cut -d/ -f 1 | tr -d [:space:] | cut -c6-)",
+        "tooltip-format": " {bandwidthUpBits}  {bandwidthDownBits}\n{ifname} \n{ipaddr}/{cidr}\n",
+        "tooltip-format-wifi": " {essid} {frequency}MHz\nStrength: {signaldBm}dBm ({signalStrength}%)\nIP: {ipaddr}/{cidr}\n {bandwidthUpBits}  {bandwidthDownBits}",
+        "interval": 10
+    },
+
+    "custom/screenshot_t": {
+        "format": " ",
+        "on-click": "~/.config/hypr/scripts/manage_wallpaper.sh",
+        "on-click-right": "~/.config/hypr/scripts/screenshot_area"
+    },
+
+    "pulseaudio": {
+        "scroll-step": 3, // %, can be a float
+        "format": "{icon} {volume}% {format_source}",
+        "format-bluetooth": "{volume}% {icon} {format_source}",
+        "format-bluetooth-muted": " {icon} {format_source}",
+        "format-muted": " {format_source}",
+        //"format-source": "{volume}% ",
+        //"format-source-muted": "",
+        "format-source": "",
+        "format-source-muted": "",
+        "format-icons": {
+            "headphone": "",
+            "hands-free": "",
+            "headset": "",
+            "phone": "",
+            "portable": "",
+            "car": "",
+            "default": ["", "", ""]
+        },
+        "on-click": "pavucontrol",
+        "on-click-right": "amixer sset Master toggle"
+    },
+
+    "custom/spotify": {
+        "exec": "~/.config/waybar/mediaplayer.py",
+        "format": "{}  🎜",
+        "return-type": "json",
+        "on-click": "playerctl play-pause",
+        "on-scroll-up": "playerctl next",
+        "on-scroll-down": "playerctl previous"
+    },
+
+    "clock#date": {
+        "format": "󰥔  {:%I:%M \n %e %b}",
+        "tooltip-format": "<big>{:%Y %B}</big>\n<tt><small>{calendar}</small></tt>",
+        "today-format": "<b>{}</b>",
+        "on-click": "~/.config/hypr/scripts/manage_wallpaper.sh",
+        "on-click-right": "~/.config/hypr/scripts/screenshot_area"
+    },
+
+    "clock#1": {
+        "format": " {:%a}",
+        "tooltip": false,
+        "on-click": "gsimplecal"
+    },
+    
+    "clock#2": {  
+          "format": " {:%Y-%m-%d}",
+          "tooltip-format": "{:%Y %B %A}",
+        "tooltip": true,
+  //        "on-click": "~/.scripts/Acer/PredatorSense/rgbkb/rgb_random.py",
+        "on-click": "swaync-client -t",
+        "on-click-middle": "~/.scripts/Acer/PredatorSense/rgbkb/rgbkb.service.sh",
+    },
+
+    "clock": {
+        "format": " {:%I:%M %p}",
+        "tooltip": false,
+        "on-click-middle": "gsimplecal",
+        "on-click-right": "~/.config/hypr/scripts/screenshot_area",
+          "on-click": "~/.config/hypr/scripts/manage_wallpaper.sh"
+
+    },
+
+
+	  "custom/recorder": {
+		"exec": "~/.config/waybar/modules/record-status.sh",
+		"interval": 1,
+		"on-click": "~/.config/waybar/modules/toggle-record.sh",
+		"return-type": "json"
+	  }
+	},
+
+
+    "temperature": {
+        // "thermal-zone": 1,
+        "interval": 4,
+        //"hwmon-path": "/sys/class/hwmon/hwmon3/temp1_input",
+        "critical-threshold": 60,
+        // "format-critical": " {temperatureC}°C",
+        "format-critical": "  {temperatureC}°C",
+        "format": "{icon}  {temperatureC}°C",
+        "format-icons": ["", "", ""],
+        "max-length": 7,
+        "min-length": 7,
+        "on-click": "~/.scripts/Acer/PredatorSense/rgbkb/rgb_random.py",
+        "on-click-middle": "~/.scripts/Acer/PredatorSense/rgbkb/rgbkb.service.sh",
+    }, 
+
+
+
+
+
+
+
+
+
+
+
+    "custom/weather": {
+        "format": "{}",
+        "format-alt": "{alt}: {}",
+        "format-alt-click": "click-right",
+        "interval": 3600,
+        "exec": "curl -s 'https://wttr.in/Baghdad?format=1&m'",
+        "exec-if": "ping wttr.in -c1",
+        "on-click": "~/.scripts/Acer/PredatorSense/rgbkb/rgb_random.py",
+        "on-click-middle": "~/.scripts/Acer/PredatorSense/rgbkb/rgbkb.service.sh",
+        "refresh-on-click": true
+    },
+
+    "hyprland/workspaces": {
+        "all-outputs": true,
+        "format": "{name}",
+        "format-icons": {
+            "1": "一", "2": "二", "3": "三", "4": "四", "5": "五",
+            "6": "六", "7": "七", "8": "八", "9": "九", "10": "十"
+        },
+        "on-scroll-up": "hyprctl dispatch workspace e+1 1>/dev/null",
+        "on-scroll-down": "hyprctl dispatch workspace e-1 1>/dev/null",
+        "sort-by-number": true,
+        "active-only": false
+    },
+
+    "tray": {
+        "icon-size": 15,
+        "spacing": 5
+    }
+}

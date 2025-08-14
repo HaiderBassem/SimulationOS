@@ -1,0 +1,56 @@
+{
+  "cpu_curve": [
+    {
+      "temp": 35,
+      "fan": 20
+    },
+    {
+      "temp": 50,
+      "fan": 35
+    },
+    {
+      "temp": 65,
+      "fan": 50
+    },
+    {
+      "temp": 75,
+      "fan": 70
+    },
+    {
+      "temp": 85,
+      "fan": 85
+    },
+    {
+      "temp": 95,
+      "fan": 100
+    }
+  ],
+  "gpu_curve": [
+    {
+      "temp": 40,
+      "fan": 25
+    },
+    {
+      "temp": 55,
+      "fan": 40
+    },
+    {
+      "temp": 70,
+      "fan": 55
+    },
+    {
+      "temp": 80,
+      "fan": 75
+    },
+    {
+      "temp": 90,
+      "fan": 90
+    },
+    {
+      "temp": 100,
+      "fan": 100
+    }
+  ],
+  "hysteresis": 3,
+  "update_interval": 2
+}
