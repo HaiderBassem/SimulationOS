@@ -115,7 +115,7 @@ udftools
 usb_modeswitch
 usbmuxd
 usbutils
-nvim
+neovim
 virtualbox-guest-utils-nox
 vpnc
 wireless-regdb
