@@ -49,7 +49,9 @@ less
 lftp
 libfido2
 libusb-compat
-linux
+#linux
+linux-cachyos
+linux-cachyos-headers
 linux-atm
 linux-firmware
 linux-firmware-marvell
@@ -127,3 +129,5 @@ xfsprogs
 xl2tpd
 bash
 eza
+cachyos-keyring
+cachyos-mirrorlist
