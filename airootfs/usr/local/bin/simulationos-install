@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#
+# SimulationOS graphical installer launcher.
+#
+# Starts Calamares against SimulationOS's own configuration tree. That tree
+# lives at a SimulationOS-owned path rather than /etc/calamares because the
+# cachyos-calamares package already owns /etc/calamares/modules/*.conf and has
+# no backup= array, so shipping our own files there would be a hard pacstrap
+# file conflict. Calamares' -c/--config flag overrides appDataDir, which
+# relocates settings.conf, modules/ AND branding/ into that one directory.
+#
+set -euo pipefail
+
+CONFIG_DIR="/usr/share/simulationos/calamares"
+LOG="${HOME:-/tmp}/simulationos-install.log"
+
+die() { printf 'simulationos-install: %s\n' "$1" >&2; exit 1; }
+
+[ -x /usr/bin/calamares ] || die "Calamares is not installed (/usr/bin/calamares missing)."
+[ -r "$CONFIG_DIR/settings.conf" ] || die "SimulationOS installer config missing: $CONFIG_DIR/settings.conf"
+
+# Re-exec with privileges if we are not root yet.
+if [ "$(id -u)" -ne 0 ]; then
+    if command -v pkexec >/dev/null 2>&1; then
+        exec pkexec env \
+            XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+            WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" \
+            DISPLAY="${DISPLAY:-}" \
+            XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-Hyprland}" \
+            QT_QPA_PLATFORM='wayland;xcb' \
+            SIMOS_INSTALL_LOG="$LOG" \
+            /usr/local/bin/simulationos-install
+    fi
+    die "Need root privileges and pkexec is unavailable. Try: sudo -E simulationos-install"
+fi
+
+LOG="${SIMOS_INSTALL_LOG:-$LOG}"
+
+# Make sure the clock is sane before any signature check happens.
+timedatectl set-ntp true 2>/dev/null || true
+
+{
+    printf '===== SimulationOS installation started: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf '===== ISO version: %s\n' "$(sed -n 's/^DISTRIB_RELEASE=//p' /etc/simulationos-release 2>/dev/null || echo unknown)"
+    command -v inxi >/dev/null 2>&1 && inxi -Fxz 2>/dev/null || true
+} >>"$LOG" 2>&1
+
+exec calamares -c "$CONFIG_DIR" -D6 >>"$LOG" 2>&1
