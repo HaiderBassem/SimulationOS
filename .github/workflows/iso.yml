@@ -75,3 +75,8 @@ jobs:
           path: out/build.log
           retention-days: 14
           if-no-files-found: ignore
+
+  boot:
+    name: Boot test
+    needs: build
+    uses: ./.github/workflows/boot.yml
