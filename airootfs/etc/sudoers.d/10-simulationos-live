@@ -1,0 +1,4 @@
+# SimulationOS live medium only.
+# Removed from the installed system by simulationos-deloop, which restores a
+# password-prompting %wheel rule instead.
+%wheel ALL=(ALL:ALL) NOPASSWD: ALL

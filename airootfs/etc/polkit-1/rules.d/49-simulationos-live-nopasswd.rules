@@ -1,0 +1,10 @@
+/* SimulationOS live medium only.
+ * Lets the live user run the installer and disk tools without a password
+ * prompt, because the live account has no password to type.
+ * Removed from the installed system by simulationos-deloop.
+ */
+polkit.addRule(function(action, subject) {
+    if (subject.isInGroup("wheel")) {
+        return polkit.Result.YES;
+    }
+});
