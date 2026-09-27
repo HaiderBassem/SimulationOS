@@ -154,9 +154,17 @@ cat > "$OUT/build-info.json" <<JSON
   "builder_host": "$(uname -srm)"
 }
 JSON
-python3 -c "import json;json.load(open('$OUT/build-info.json'))" 2>/dev/null \
-    && green "    build-info.json is valid JSON" \
-    || red   "    WARNING: build-info.json is not valid JSON"
+if command -v python3 >/dev/null 2>&1; then
+    python3 -c "import json;json.load(open('$OUT/build-info.json'))" 2>/dev/null \
+        && green "    build-info.json is valid JSON" \
+        || die "build-info.json is not valid JSON"
+elif command -v jq >/dev/null 2>&1; then
+    jq -e . "$OUT/build-info.json" >/dev/null 2>&1 \
+        && green "    build-info.json is valid JSON" \
+        || die "build-info.json is not valid JSON"
+else
+    info "    (no python3 or jq in the builder; skipping JSON validation)"
+fi
 
 green ""
 green "Build complete"
