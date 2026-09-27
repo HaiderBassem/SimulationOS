@@ -275,23 +275,24 @@ did not happen.
 | Item | Status | Evidence |
 |---|---|---|
 | Upstream archiso/CachyOS/Calamares research | VERIFIED | primary sources, file+line, in `docs/research/sources.md` |
-| `linux-cachyos` kernel/initramfs/preset naming | VERIFIED | `linux-cachyos/PKGBUILD:177,612,615` |
-| **Full dependency resolution against real repos** | **VERIFIED** | x86_64 Arch container: 144 requested -> **577 resolved**, exactly 6 from `[cachyos]` |
+| Dependency resolution against real repos | VERIFIED | x86_64 Arch container: 144 requested -> **577 resolved**, exactly 6 from `[cachyos]` |
 | Profile internal consistency | VERIFIED | `validate-profile.sh` passes |
-| Validator actually catches regressions | VERIFIED | 10/10 fault injections caught |
-| Shell syntax + shellcheck + YAML/JSON parse | VERIFIED | all clean |
-| **mkarchiso accepts the profile** | **VERIFIED** | real `mkarchiso` run passed its own bootmode/profile validation and entered pacstrap |
-| **ISO build completes** | **IN PROGRESS / UNVERIFIED** | running under arm64->x86_64 emulation; see below |
-| UEFI boot | NOT TESTED | needs a finished ISO |
-| BIOS boot | NOT TESTED | needs a finished ISO |
-| Hyprland live session | NOT TESTED | needs a finished ISO |
-| Calamares run / full install / installed-system boot | NOT TESTED | needs a finished ISO |
+| Validator actually catches regressions | VERIFIED | 11/11 fault injections caught |
+| Shell syntax + shellcheck + YAML/JSON | VERIFIED | clean |
+| **ISO builds end to end** | **VERIFIED** | `simulationos-2026.09.27-x86_64.iso`, 2,186,756,096 bytes, sha256 `caf09548…6f77e8`, archiso 90-1, mkarchiso 803 s |
+| **`linux-cachyos` is the kernel in the artefact** | **VERIFIED** | ISO contains `arch/boot/x86_64/vmlinuz-linux-cachyos` + `initramfs-linux-cachyos.img` |
+| **Both bootloaders present in the artefact** | **VERIFIED** | `boot/syslinux/isolinux.bin` (BIOS) and `EFI/BOOT/BOOTX64.EFI` + `loader/entries/01-simulationos-linux.conf` (UEFI) |
+| **Boot menus branded, kernel references correct** | **VERIFIED** | menus extracted *from the ISO*: say SimulationOS, no "Arch Linux install medium", both point at `vmlinuz-linux-cachyos` |
+| **Installer source path matches the ISO layout** | **VERIFIED** | `arch/x86_64/airootfs.sfs` present and equals the `unpackfs.conf` source |
+| ISO boots (UEFI / BIOS) | NOT TESTED | needs QEMU; see below |
+| Hyprland live session | NOT TESTED | requires a boot |
+| Calamares run / full install / installed-system boot | NOT TESTED | requires a boot |
 | Hardware (real GPUs, Wi-Fi, laptops) | NOT TESTED | no hardware matrix yet |
 
-Nothing above claims a boot that did not happen. The build reached pacstrap
-with a 1.37 GiB download / 3.96 GiB installed footprint, which proves the
-profile is structurally valid to the real tool, but a finished, booted ISO is
-a strictly stronger claim that has not yet been made.
+The build was produced on macOS arm64 through the containerised x86_64 builder,
+so it is a genuine x86_64 artefact, but it has **never been booted**. A
+structurally correct ISO is a strictly weaker claim than a booting one, and no
+claim is made here beyond what the table states.
 
 The first real run should be:
 
