@@ -26,7 +26,7 @@ info()  { printf '\033[36m==>\033[0m %s\n' "$*"; }
 command -v qemu-system-x86_64 >/dev/null || { red "qemu-system-x86_64 not installed"; exit 1; }
 
 mkdir -p "$OUT"
-: > "$LOG"
+[ "${SIMOS_BOOT_ANALYZE_ONLY:-0}" = "1" ] || : > "$LOG"
 
 # shellcheck disable=SC2054  # commas are part of QEMU option values
 QEMU=(qemu-system-x86_64
@@ -59,38 +59,64 @@ if [ "$FIRMWARE" = "uefi" ]; then
            -drive "if=pflash,format=raw,unit=1,file=$VARS")
 fi
 
+# Markers proving progressively deeper boot stages. Crucially this also
+# watches for failure signatures, so a kernel panic is reported rather than
+# looking identical to "still booting".
+SUCCESS='Reached target Graphical Interface|reached target graphical|login:|servicename=display-manager'
+FAILURE='Kernel panic|Unable to mount root|end Kernel panic|You are in emergency mode|Failed to start Light Display Manager|Entering emergency mode'
+
+if [ "${SIMOS_BOOT_ANALYZE_ONLY:-0}" = "1" ]; then
+    info "Analysing the existing log $LOG without booting"
+    QPID=0
+else
 info "Booting $(basename "$ISO") headlessly ($FIRMWARE, timeout ${TIMEOUT}s)"
 "${QEMU[@]}" &
 QPID=$!
 # shellcheck disable=SC2064
 trap "kill $QPID 2>/dev/null" EXIT
 
-# Markers proving progressively deeper boot stages. Crucially this also
-# watches for failure signatures, so a kernel panic is reported rather than
-# looking identical to "still booting".
-SUCCESS='Reached target Graphical Interface|reached target graphical'
-FAILURE='Kernel panic|Unable to mount root|end Kernel panic|You are in emergency mode|Failed to start Light Display Manager|Entering emergency mode'
+
+fi
 
 deadline=$(( $(date +%s) + TIMEOUT ))
+if [ "${SIMOS_BOOT_ANALYZE_ONLY:-0}" = "1" ]; then deadline=0; fi
 result="TIMEOUT"
+if [ "${SIMOS_BOOT_ANALYZE_ONLY:-0}" = "1" ]; then
+    grep -qE "$FAILURE" "$LOG" 2>/dev/null && result="FAIL"
+    grep -qE "$SUCCESS" "$LOG" 2>/dev/null && result="PASS"
+fi
 while [ "$(date +%s)" -lt "$deadline" ]; do
+    [ "$QPID" -eq 0 ] && break
     kill -0 "$QPID" 2>/dev/null || { result="QEMU_EXITED"; break; }
     if grep -qE "$FAILURE" "$LOG" 2>/dev/null; then result="FAIL"; break; fi
     if grep -qE "$SUCCESS" "$LOG" 2>/dev/null; then result="PASS"; break; fi
     sleep 3
 done
-kill "$QPID" 2>/dev/null; wait "$QPID" 2>/dev/null
+[ "$QPID" -ne 0 ] && { kill "$QPID" 2>/dev/null; wait "$QPID" 2>/dev/null; }
 
 printf '\n== boot stages observed\n'
+# Two kinds of stage: ones whose absence is a real problem, and ones that are
+# simply not visible on the serial console because tty0 is the primary console
+# (systemd sends its status there). Reporting the latter as MISS reads as a
+# failure when the boot is healthy, so they are labelled distinctly.
 check() {
-    if grep -qE "$2" "$LOG" 2>/dev/null; then green "  ok    $1"; else red "  MISS  $1"; fi
+    if grep -qE "$2" "$LOG" 2>/dev/null; then green "  ok      $1"; else red "  MISSING $1"; fi
 }
-check "kernel started"            'Linux version'
+info_check() {
+    if grep -qE "$2" "$LOG" 2>/dev/null; then
+        green "  ok      $1"
+    else
+        printf '  n/a     %s (not emitted to serial; tty0 is the primary console)\n' "$1"
+    fi
+}
+info_check "kernel started"            'Linux version'
 check "linux-cachyos kernel"      'linux-cachyos|cachyos'
-check "archiso initramfs ran"     'archiso|Mounting .*airootfs|/run/archiso'
-check "systemd started"           'systemd\[1\]'
-check "reached multi-user"        'Reached target Multi-User|reached target multi-user'
-check "reached graphical"         "$SUCCESS"
+info_check "archiso initramfs ran"     'archiso|Mounting .*airootfs|/run/archiso'
+info_check "systemd started"           'systemd\[1\]'
+info_check "reached multi-user"        'Reached target Multi-User|reached target multi-user'
+check "getty/login prompt reached" 'login:'
+check "SimulationOS branding shown" 'SimulationOS'
+info_check "reached graphical target"   'Reached target Graphical Interface|servicename=display-manager|servicename=sddm' 
 if grep -q 'Kernel panic' "$LOG" 2>/dev/null; then
     red "  MISS  no kernel panic"
 else

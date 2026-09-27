@@ -284,15 +284,21 @@ did not happen.
 | **Both bootloaders present in the artefact** | **VERIFIED** | `boot/syslinux/isolinux.bin` (BIOS) and `EFI/BOOT/BOOTX64.EFI` + `loader/entries/01-simulationos-linux.conf` (UEFI) |
 | **Boot menus branded, kernel references correct** | **VERIFIED** | menus extracted *from the ISO*: say SimulationOS, no "Arch Linux install medium", both point at `vmlinuz-linux-cachyos` |
 | **Installer source path matches the ISO layout** | **VERIFIED** | `arch/x86_64/airootfs.sfs` present and equals the `unpackfs.conf` source |
-| ISO boots (UEFI / BIOS) | NOT TESTED | needs QEMU; see below |
+| **ISO boots (UEFI)** | **VERIFIED** | QEMU+OVMF: systemd-boot menu -> kernel -> `SimulationOS Alpha Linux 7.2.7-1-cachyos (ttyS0)` / `simulationos login:` |
+| ISO boots (BIOS/syslinux) | NOT TESTED | `./scripts/boot-test.sh` with `SIMOS_BOOT_TEST_FIRMWARE=bios` |
 | Hyprland live session | NOT TESTED | requires a boot |
 | Calamares run / full install / installed-system boot | NOT TESTED | requires a boot |
 | Hardware (real GPUs, Wi-Fi, laptops) | NOT TESTED | no hardware matrix yet |
 
-The build was produced on macOS arm64 through the containerised x86_64 builder,
-so it is a genuine x86_64 artefact, but it has **never been booted**. A
-structurally correct ISO is a strictly weaker claim than a booting one, and no
-claim is made here beyond what the table states.
+The ISO was built on macOS arm64 through the containerised x86_64 builder and
+booted under QEMU/TCG emulation. The UEFI boot reached a login prompt showing
+the SimulationOS banner on the CachyOS kernel, which proves firmware ->
+systemd-boot -> kernel -> initramfs -> systemd -> getty end to end.
+
+It does **not** prove the graphical session: SDDM and Hyprland starting, the
+installer running, or an installed system booting on its own are all still
+untested. Kernel and systemd status output goes to tty0 rather than the serial
+console, so those stages are reported as "n/a" rather than as failures.
 
 The first real run should be:
 
