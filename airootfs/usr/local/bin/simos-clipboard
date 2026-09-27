@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# SimulationOS clipboard history picker.
+# Requires: cliphist, wofi, wl-clipboard.
+set -euo pipefail
+
+cliphist list \
+    | wofi --dmenu --prompt 'Clipboard' --width 720 --lines 12 \
+    | cliphist decode \
+    | wl-copy

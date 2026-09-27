@@ -1,125 +1,91 @@
 #
-# ~/.bashrc
+# ~/.bashrc - SimulationOS
+#
+# Every alias here refers to a command that SimulationOS actually installs.
+# The previous version aliased `rm` to trash-put and used nvim/nvidia-smi/
+# snapper/auto-cpufreq without shipping any of them, which broke `rm` in the
+# live session.
 #
 
 # If not running interactively, don't do anything
 [[ $- != *i* ]] && return
 
-# Change the window title
 PS1='[\u@\h \W]\$ '
 
 [ -r /usr/share/bash-completion/bash_completion ] && . /usr/share/bash-completion/bash_completion
 
-# Export
 export EDITOR='nvim'
 export VISUAL='nvim'
 export HISTCONTROL=ignoreboth:erasedups
 
-#ignore upper and lowercase when TAB completion
-bind "set completion-ignore-case on"
+# ignore case during TAB completion
+bind "set completion-ignore-case on" 2>/dev/null
 
-#system
-alias edital='$EDITOR ~/.bashrc'
-alias applyal='source ~/.bashrc'
-alias please='sudo'
-
-
-
+# ------------------------------------------------------------------- listing
+alias ls='eza --color=always --group-directories-first --icons'
 alias l='eza --color=always --group-directories-first --icons'
-alias l.='eza -a | grep -e '\''^\.'\'''
 alias la='eza -al --color=always --group-directories-first --icons'
 alias ll='eza -l --color=always --group-directories-first --icons'
-alias ls='eza -a --color=always --group-directories-first --icons'
 alias lt='eza -aT --color=always --group-directories-first --icons'
+
+# ------------------------------------------------------------------- general
 alias grep='grep --colour=auto'
-alias egrep='egrep --colour=auto'
-alias fgrep='fgrep --colour=auto'
-alias df='df -h'                          # human-readable sizes
-alias free='free -m'  
-alias c="clear"
-alias n="nvim"
-alias ex="exit"
-alias fs="fastfetch"
-alias nv='nvidia-smi'
+alias df='df -h'
+alias du='du -h --max-depth=1'
+alias free='free -m'
+alias c='clear'
+alias n='nvim'
+alias fs='fastfetch'
 alias ..='cd ..'
 alias ...='cd ../..'
 alias ....='cd ../../..'
-alias .....='cd ../../../..'
 
-
-# git
-alias du='du -h --max-depth=1'
+# ----------------------------------------------------------------------- git
+alias gs='git status'
+alias ga='git add'
 alias gc='git commit -m'
 alias gco='git checkout'
 alias gb='git branch'
 alias gd='git diff'
-alias ga='git add'
-alias gs='git status'
-alias gp='git push'
-alias gpm='git push origin main'
-alias gl='git pull'
-alias gn='git clone'
-alias gpr='git pull --rebase'
 
-#newtworks
-alias ports='netstat -tulanp'
-
-#pacman
-alias belong='sudo pacman -Qo'
+# -------------------------------------------------------------------- pacman
 alias in='sudo pacman -S'
-alias qu='sudo pacman -Sii'
 alias re='sudo pacman -Rs'
+alias up='sudo pacman -Syu'
 alias search='pacman -Ss'
-alias up='sudo pacman -Syyu'
+alias belong='pacman -Qo'
 
-#etc
-alias kernel='ls /usr/lib/modules'
+# --------------------------------------------------------------- SimulationOS
+alias install-simulationos='simulationos-install'
 alias kernels='ls /usr/lib/modules'
-alias rm='trash-put'
-alias snapchome='sudo snapper -c home create-config /home'
-alias snapcroot='sudo snapper -c root create-config /'
-alias sound='pavucontrol'
 
-
-ex ()
-{
-  if [ -f $1 ] ; then
-    case $1 in
-      *.tar.bz2)   tar xjf $1   ;;
-      *.tar.gz)    tar xzf $1   ;;
-      *.bz2)       bunzip2 $1   ;;
-      *.rar)       unrar x $1   ;;
-      *.gz)        gunzip $1    ;;
-      *.tar)       tar xf $1    ;;
-      *.tbz2)      tar xjf $1   ;;
-      *.tgz)       tar xzf $1   ;;
-      *.zip)       unzip $1     ;;
-      *.Z)         uncompress $1;;
-      *.7z)        7z x $1      ;;
-      *.deb)       ar x $1      ;;
-      *.tar.xz)    tar xf $1    ;;
-      *.tar.zst)   tar xf $1    ;;
-      *)           echo "'$1' cannot be extracted via ex()" ;;
-    esac
-  else
-    echo "'$1' is not a valid file"
+# extract almost anything
+extract() {
+  if [ ! -f "$1" ]; then
+    printf 'extract: %s is not a valid file\n' "$1" >&2
+    return 1
   fi
+  case "$1" in
+    *.tar.bz2|*.tbz2) tar xjf "$1" ;;
+    *.tar.gz|*.tgz)   tar xzf "$1" ;;
+    *.tar.xz|*.tar.zst|*.tar) tar xf "$1" ;;
+    *.bz2)            bunzip2 "$1" ;;
+    *.gz)             gunzip "$1" ;;
+    *.zip)            unzip "$1" ;;
+    *.7z)             7z x "$1" ;;
+    *)                printf 'extract: unsupported archive %s\n' "$1" >&2; return 1 ;;
+  esac
 }
 
-# Bash won't get SIGWINCH if another process is in the foreground.
-# Enable checkwinsize so that bash will check the terminal size when
-# it regains control.  #65623
-# http://cnswww.cns.cwru.edu/~chet/bash/FAQ (E11)
 shopt -s checkwinsize
+shopt -s autocd
+shopt -s cdspell
+shopt -s cmdhist
+shopt -s histappend
+shopt -s expand_aliases
 
-#beautiful stuff
-shopt -s autocd # change to named directory
-shopt -s cdspell # autocorrects cd misspellings
-shopt -s cmdhist # save multi-line commands in history as single line
-shopt -s dotglob
-shopt -s histappend # do not overwrite history
-shopt -s expand_aliases # expand aliases
-
-
-
-#fastfetch
+# Short system summary on the first interactive shell of a session.
+if [ -z "$SIMOS_FETCH_SHOWN" ] && [ -t 1 ]; then
+  export SIMOS_FETCH_SHOWN=1
+  command -v fastfetch >/dev/null 2>&1 && fastfetch
+fi

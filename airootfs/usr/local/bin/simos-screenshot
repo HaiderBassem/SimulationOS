@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# SimulationOS screenshot helper.
+# Requires: grim, slurp, wl-clipboard (all in packages.x86_64).
+set -euo pipefail
+
+mode="${1:-full}"
+outdir="${XDG_PICTURES_DIR:-$HOME/Pictures}/Screenshots"
+mkdir -p "$outdir"
+file="$outdir/simos-$(date +%Y%m%d-%H%M%S).png"
+
+notify() {
+    command -v notify-send >/dev/null 2>&1 && notify-send "Screenshot" "$1" || printf '%s\n' "$1"
+}
+
+case "$mode" in
+    full)
+        grim "$file"
+        ;;
+    area)
+        geometry="$(slurp)" || exit 1
+        grim -g "$geometry" "$file"
+        ;;
+    window)
+        # Ask Hyprland for the focused window's box; fall back to area select.
+        geometry=""
+        if command -v hyprctl >/dev/null 2>&1; then
+            geometry="$(hyprctl activewindow | awk '
+                /^[[:space:]]*at:/   { gsub(/,/, " ", $2); ax=$2; ay=$3 }
+                /^[[:space:]]*size:/ { gsub(/,/, " ", $2); sw=$2; sh=$3 }
+                END { if (sw != "" && sh != "") printf "%d,%d %dx%d", ax, ay, sw, sh }')"
+        fi
+        if [ -z "$geometry" ]; then
+            geometry="$(slurp)" || exit 1
+        fi
+        grim -g "$geometry" "$file"
+        ;;
+    *)
+        printf 'usage: %s [full|area|window]\n' "${0##*/}" >&2
+        exit 2
+        ;;
+esac
+
+wl-copy --type image/png < "$file"
+notify "Saved to $file and copied to the clipboard"

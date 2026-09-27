@@ -1,0 +1,86 @@
+// SimulationOS - Waybar
+//
+// Built-in modules only, plus one custom module that calls simos-powermenu
+// (shipped in airootfs/usr/local/bin). Nothing here depends on an external
+// helper script, so a missing script can never blank the bar.
+{
+  "layer": "top",
+  "position": "top",
+  "height": 34,
+  "spacing": 6,
+
+  "modules-left":   ["hyprland/workspaces", "hyprland/submap"],
+  "modules-center": ["hyprland/window"],
+  "modules-right":  ["tray", "pulseaudio", "network", "cpu", "memory", "temperature", "battery", "clock", "custom/power"],
+
+  "hyprland/workspaces": {
+    "format": "{id}",
+    "on-click": "activate",
+    "all-outputs": true
+  },
+
+  "hyprland/window": {
+    "format": "{title}",
+    "max-length": 70,
+    "separate-outputs": true
+  },
+
+  "tray": {
+    "icon-size": 16,
+    "spacing": 8
+  },
+
+  "pulseaudio": {
+    "format": "{icon} {volume}%",
+    "format-muted": "󰝟 muted",
+    "format-icons": { "default": ["󰕿", "󰖀", "󰕾"] },
+    "on-click": "pavucontrol",
+    "scroll-step": 5
+  },
+
+  "network": {
+    "format-wifi": "󰖩 {essid}",
+    "format-ethernet": "󰈀 {ipaddr}",
+    "format-linked": "󰈀 no IP",
+    "format-disconnected": "󰖪 offline",
+    "tooltip-format": "{ifname} via {gwaddr}",
+    "on-click": "nm-connection-editor"
+  },
+
+  "cpu": {
+    "format": "󰻠 {usage}%",
+    "interval": 5
+  },
+
+  "memory": {
+    "format": "󰍛 {percentage}%",
+    "interval": 5
+  },
+
+  "temperature": {
+    "critical-threshold": 82,
+    "format": "{icon} {temperatureC}°C",
+    "format-icons": ["", "", ""]
+  },
+
+  "battery": {
+    "states": { "warning": 25, "critical": 10 },
+    "format": "{icon} {capacity}%",
+    "format-charging": "󰂄 {capacity}%",
+    "format-plugged": "󰚥 {capacity}%",
+    "format-icons": ["󰁺", "󰁼", "󰁾", "󰂀", "󰂂"],
+    "tooltip-format": "{timeTo}"
+  },
+
+  "clock": {
+    "format": "󰥔 {:%H:%M}",
+    "format-alt": "󰃭 {:%a %d %b %Y}",
+    "tooltip-format": "<tt><small>{calendar}</small></tt>"
+  },
+
+  "custom/power": {
+    "format": "󰐥",
+    "tooltip": false,
+    "on-click": "simos-powermenu"
+  }
+}
