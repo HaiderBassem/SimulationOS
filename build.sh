@@ -191,7 +191,12 @@ exec "$RUNTIME" run --rm -i \
 
         printf "\033[36m==>\033[0m Refreshing keyring and installing archiso\n"
         pacman $PACFLAGS -Sy --noconfirm --needed archlinux-keyring >/dev/null
-        pacman $PACFLAGS -S  --noconfirm --needed archiso >/dev/null
+        pacman $PACFLAGS -S  --noconfirm --needed archiso git >/dev/null
+
+        # Without this, git refuses to read the bind-mounted repo ("dubious
+        # ownership") and build-info.json records git_commit: unknown, which
+        # defeats the point of build provenance.
+        git config --global --add safe.directory /simulationos
 
         printf "\033[36m==>\033[0m Trusting the CachyOS signing key\n"
         pacman-key --init >/dev/null 2>&1 || true
