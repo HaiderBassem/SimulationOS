@@ -68,7 +68,7 @@ Provision the CachyOS key on the build host (the official CachyOS procedure):
 ```bash
 sudo pacman-key --recv-keys F3B607488DB35A47 --keyserver keyserver.ubuntu.com
 sudo pacman-key --lsign-key F3B607488DB35A47
-sudo pacman -U https://mirror.cachyos.org/repo/x86_64/cachyos/cachyos-keyring-20240331-1-any.pkg.tar.zst
+sudo pacman -Sy --config ./pacman.conf cachyos-keyring cachyos-mirrorlist
 sudo pacman -S archiso
 ```
 
@@ -77,21 +77,25 @@ exact remediation message rather than failing halfway through a build.
 
 ### Not building on Arch?
 
-Use an x86_64 Arch container. `mkarchiso` needs elevated privileges:
+You do not need to do anything special. `./build.sh` detects the host and runs
+the build inside an x86_64 Arch container automatically:
 
 ```bash
-podman run --rm -it --privileged \
-  -v "$PWD":/simulationos -w /simulationos \
-  docker.io/archlinux:latest bash
-# then, inside:
-pacman -Sy --noconfirm archlinux-keyring && pacman -Syu --noconfirm
-# ...provision the CachyOS key as above, then:
-./scripts/build-iso.sh
+./build.sh
 ```
 
-On an ARM Mac or ARM Linux host you must force an x86_64 container
-(`--platform linux/amd64` with binfmt/qemu-user configured). This is very slow
-and is not the supported path — prefer a real x86_64 machine or VM.
+It prints exactly what it decided before doing any work:
+
+```
+==> Host:    Darwin arm64
+==> Target:  linux x86_64
+==> Builder: container
+```
+
+The container is pinned to `--platform linux/amd64`, so an arm64 host can
+never silently produce an arm64 ISO. On such a host the builder runs under
+emulation: correct, but **much** slower than a native x86_64 machine. Prefer
+real x86_64 hardware or a VM for routine builds.
 
 ---
 
@@ -99,6 +103,7 @@ and is not the supported path — prefer a real x86_64 machine or VM.
 
 ```
 SimulationOS/
+├── build.sh                      THE build entry point
 ├── profiledef.sh                 archiso manifest (ISO name, boot modes, permissions)
 ├── packages.x86_64               everything installed into the ISO
 ├── pacman.conf                   BUILD HOST repo config (explicit CachyOS Server=)
@@ -129,10 +134,18 @@ SimulationOS/
 │   ├── validate-profile.sh       static consistency checks
 │   ├── build-iso.sh              environment checks + mkarchiso + checksum
 │   ├── clean-build.sh            remove work/ and out/
+│   ├── inspect-iso.sh            L3 artefact inspection
 │   ├── test-iso.sh               boot it in QEMU (UEFI or BIOS)
 │   └── make-wallpaper.py         regenerate the wallpaper asset
 │
-└── docs/architecture.md
+├── .github/workflows/
+│   ├── validate.yml              L1 static validation (seconds, no container)
+│   └── iso.yml                   L2/L3 clean build + artefact inspection
+│
+└── docs/
+    ├── architecture.md           design rationale
+    ├── adr/                      15 decision records
+    └── research/sources.md       primary-source findings
 ```
 
 ---
@@ -156,10 +169,28 @@ archiso initramfs hook, shell syntax errors, and more.
 ### Build
 
 ```bash
-sudo ./scripts/build-iso.sh
+./build.sh
 ```
 
-Produces `out/simulationos-<version>-x86_64.iso` and a matching `.sha256`.
+This is the **only** build entry point — developers, CI and releases all use
+it, so a local build and a CI build cannot drift. It runs natively on Arch
+x86_64 and in a container everywhere else.
+
+```bash
+./build.sh --validate    # static checks only
+./build.sh --clean       # wipe work/ and out/ first
+./build.sh --no-cache    # ignore the local package cache
+./build.sh --help
+```
+
+Produces, in `out/`:
+
+```
+simulationos-<version>-x86_64.iso
+simulationos-<version>-x86_64.iso.sha256
+build-info.json      commit, archiso version, checksum, duration
+build.log
+```
 
 ### Clean
 
@@ -241,17 +272,26 @@ Everything below was done on a **macOS arm64** workstation, which cannot run
 `mkarchiso`, `pacman` or an x86_64 QEMU guest. Nothing here claims a boot that
 did not happen.
 
-| Item | Status |
-|---|---|
-| Upstream archiso/CachyOS research against current sources | VERIFIED |
-| `linux-cachyos` kernel/initramfs/preset naming | VERIFIED (from the CachyOS `PKGBUILD`) |
-| Every package name resolves in Arch or CachyOS repositories | VERIFIED (repo queries) |
-| Profile internal consistency | VERIFIED (`validate-profile.sh` passes; 10 fault-injection cases caught) |
-| Shell scripts: syntax + `shellcheck` | VERIFIED |
-| **ISO build** | **NOT TESTED — blocked: no Linux x86_64 host** |
-| **UEFI boot / BIOS boot** | **NOT TESTED — blocked: no ISO** |
-| **Hyprland live session** | **NOT TESTED — blocked: no ISO** |
-| **Calamares run / full installation / installed-system boot** | **NOT TESTED — blocked: no ISO** |
+| Item | Status | Evidence |
+|---|---|---|
+| Upstream archiso/CachyOS/Calamares research | VERIFIED | primary sources, file+line, in `docs/research/sources.md` |
+| `linux-cachyos` kernel/initramfs/preset naming | VERIFIED | `linux-cachyos/PKGBUILD:177,612,615` |
+| **Full dependency resolution against real repos** | **VERIFIED** | x86_64 Arch container: 144 requested -> **577 resolved**, exactly 6 from `[cachyos]` |
+| Profile internal consistency | VERIFIED | `validate-profile.sh` passes |
+| Validator actually catches regressions | VERIFIED | 10/10 fault injections caught |
+| Shell syntax + shellcheck + YAML/JSON parse | VERIFIED | all clean |
+| **mkarchiso accepts the profile** | **VERIFIED** | real `mkarchiso` run passed its own bootmode/profile validation and entered pacstrap |
+| **ISO build completes** | **IN PROGRESS / UNVERIFIED** | running under arm64->x86_64 emulation; see below |
+| UEFI boot | NOT TESTED | needs a finished ISO |
+| BIOS boot | NOT TESTED | needs a finished ISO |
+| Hyprland live session | NOT TESTED | needs a finished ISO |
+| Calamares run / full install / installed-system boot | NOT TESTED | needs a finished ISO |
+| Hardware (real GPUs, Wi-Fi, laptops) | NOT TESTED | no hardware matrix yet |
+
+Nothing above claims a boot that did not happen. The build reached pacstrap
+with a 1.37 GiB download / 3.96 GiB installed footprint, which proves the
+profile is structurally valid to the real tool, but a finished, booted ISO is
+a strictly stronger claim that has not yet been made.
 
 The first real run should be:
 
