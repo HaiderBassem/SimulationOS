@@ -82,7 +82,9 @@ QEMU=(qemu-system-x86_64
 
 if [ "$FIRMWARE" = "uefi" ]; then
     OVMF_CODE=""
-    for c in /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+    for c in /opt/homebrew/share/qemu/edk2-x86_64-code.fd \
+             /usr/local/share/qemu/edk2-x86_64-code.fd \
+             /usr/share/edk2/x64/OVMF_CODE.4m.fd \
              /usr/share/edk2/x64/OVMF_CODE.fd \
              /usr/share/edk2-ovmf/x64/OVMF_CODE.fd \
              /usr/share/OVMF/OVMF_CODE_4M.fd \
@@ -93,7 +95,9 @@ if [ "$FIRMWARE" = "uefi" ]; then
         || die "OVMF firmware not found. Install 'edk2-ovmf' (Arch) or 'ovmf' (Debian/Fedora), or use --bios."
 
     OVMF_VARS_SRC=""
-    for v in /usr/share/edk2/x64/OVMF_VARS.4m.fd \
+    for v in /opt/homebrew/share/qemu/edk2-i386-vars.fd \
+             /usr/local/share/qemu/edk2-i386-vars.fd \
+             /usr/share/edk2/x64/OVMF_VARS.4m.fd \
              /usr/share/edk2/x64/OVMF_VARS.fd \
              /usr/share/edk2-ovmf/x64/OVMF_VARS.fd \
              /usr/share/OVMF/OVMF_VARS_4M.fd \

@@ -30,7 +30,7 @@ mkdir -p "$OUT"
 
 # shellcheck disable=SC2054  # commas are part of QEMU option values
 QEMU=(qemu-system-x86_64
-      -machine q35,accel=kvm:tcg
+      -machine "q35,accel=${SIMOS_QEMU_ACCEL:-kvm:tcg}"
       -cpu max -smp 2 -m "$RAM"
       -display none -vga std
       -serial "file:$LOG"
@@ -40,13 +40,17 @@ QEMU=(qemu-system-x86_64
 
 if [ "$FIRMWARE" = "uefi" ]; then
     CODE=""
-    for c in /usr/share/edk2/x64/OVMF_CODE.4m.fd /usr/share/edk2/x64/OVMF_CODE.fd \
+    for c in /opt/homebrew/share/qemu/edk2-x86_64-code.fd \
+             /usr/local/share/qemu/edk2-x86_64-code.fd \
+             /usr/share/edk2/x64/OVMF_CODE.4m.fd /usr/share/edk2/x64/OVMF_CODE.fd \
              /usr/share/edk2-ovmf/x64/OVMF_CODE.fd /usr/share/OVMF/OVMF_CODE_4M.fd; do
         [ -f "$c" ] && { CODE="$c"; break; }
     done
     [ -n "$CODE" ] || { red "OVMF not found; install edk2-ovmf or use SIMOS_BOOT_TEST_FIRMWARE=bios"; exit 1; }
     VARS_SRC=""
-    for v in /usr/share/edk2/x64/OVMF_VARS.4m.fd /usr/share/edk2/x64/OVMF_VARS.fd \
+    for v in /opt/homebrew/share/qemu/edk2-i386-vars.fd \
+             /usr/local/share/qemu/edk2-i386-vars.fd \
+             /usr/share/edk2/x64/OVMF_VARS.4m.fd /usr/share/edk2/x64/OVMF_VARS.fd \
              /usr/share/edk2-ovmf/x64/OVMF_VARS.fd /usr/share/OVMF/OVMF_VARS_4M.fd; do
         [ -f "$v" ] && { VARS_SRC="$v"; break; }
     done
