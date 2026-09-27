@@ -52,7 +52,11 @@ if ! pacman -Q cachyos-keyring >/dev/null 2>&1; then
     red "Provision it with:"
     red "    pacman-key --recv-keys $CACHYOS_KEY --keyserver keyserver.ubuntu.com"
     red "    pacman-key --lsign-key $CACHYOS_KEY"
-    red "    pacman -U $CACHYOS_MIRROR/cachyos-keyring-20240331-1-any.pkg.tar.zst"
+    red "    pacman -Sy --config $REPO/pacman.conf cachyos-keyring cachyos-mirrorlist"
+    red ""
+    red "(Installing through the profile's own pacman.conf avoids a hardcoded"
+    red " package-version URL, which goes stale every time CachyOS rebuilds"
+    red " the keyring.)"
     exit 1
 fi
 
@@ -91,9 +95,11 @@ mkdir -p -- "$WORK" "$OUT"
 
 # -------------------------------------------------------------------- 5. build
 info "Running mkarchiso (this takes a while and needs ~20 GB free)"
-set -x
-mkarchiso -v -w "$WORK" -o "$OUT" "$REPO"
-set +x
+BUILD_LOG="$OUT/build.log"
+BUILD_START="$(date -u +%s)"
+set -o pipefail
+mkarchiso -v -w "$WORK" -o "$OUT" "$REPO" 2>&1 | tee "$BUILD_LOG"
+BUILD_END="$(date -u +%s)"
 
 # ------------------------------------------------------------- 6/7. artifact
 ISO="$(ls -1t "$OUT"/simulationos-*.iso 2>/dev/null | head -1)"
@@ -102,11 +108,37 @@ ISO="$(ls -1t "$OUT"/simulationos-*.iso 2>/dev/null | head -1)"
 info "Generating SHA256 checksum"
 ( cd "$OUT" && sha256sum "$(basename "$ISO")" > "$(basename "$ISO").sha256" )
 
+info "Writing build-info.json"
+# Everything a release engineer needs to answer "which commit produced this
+# exact file, with which tools".
+cat > "$OUT/build-info.json" <<JSON
+{
+  "iso": "$(basename "$ISO")",
+  "sha256": "$(cut -d" " -f1 < "$ISO.sha256")",
+  "size_bytes": $(stat -c%s "$ISO" 2>/dev/null || stat -f%z "$ISO"),
+  "iso_version": "$(bash -c 'source "'"$REPO"'/profiledef.sh"; printf %s "$iso_version"')",
+  "target_arch": "$(bash -c 'source "'"$REPO"'/profiledef.sh"; printf %s "$arch"')",
+  "git_commit": "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo unknown)",
+  "git_branch": "$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)",
+  "git_dirty": $(test -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" && echo true || echo false),
+  "archiso_version": "$(pacman -Q archiso 2>/dev/null | awk '{print $2}' || echo unknown)",
+  "pacman_version": "$(pacman -Q pacman 2>/dev/null | awk '{print $2}' || echo unknown)",
+  "build_date_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "build_seconds": $(( BUILD_END - BUILD_START )),
+  "builder_host": "$(uname -srm)"
+}
+JSON
+python3 -c "import json;json.load(open('$OUT/build-info.json'))" 2>/dev/null \
+    && green "    build-info.json is valid JSON" \
+    || red   "    WARNING: build-info.json is not valid JSON"
+
 green ""
 green "Build complete"
 green "  ISO:      $ISO"
 green "  Size:     $(du -h "$ISO" | cut -f1)"
 green "  SHA256:   $(cut -d' ' -f1 < "$ISO.sha256")"
 green "  Checksum: $ISO.sha256"
+green "  Metadata: $OUT/build-info.json"
+green "  Log:      $BUILD_LOG"
 green ""
 green "Boot it with: ./scripts/test-iso.sh \"$ISO\""

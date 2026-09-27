@@ -1,0 +1,77 @@
+# L2/L3 - build the ISO in a clean environment and inspect the artefact.
+#
+# CI calls ./build.sh, the same entry point developers use. There is
+# deliberately no second build procedure here: a CI-only build path is how
+# "works locally, breaks in CI" starts.
+name: iso
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+  pull_request:
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    uses: ./.github/workflows/validate.yml
+
+  build:
+    name: Build ISO
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: archlinux:latest
+      options: --privileged
+    steps:
+      - name: Install build dependencies
+        run: |
+          pacman -Sy --noconfirm --needed archlinux-keyring
+          pacman -S  --noconfirm --needed archiso git jq
+
+      - uses: actions/checkout@v4
+
+      - name: Trust the CachyOS signing key
+        run: |
+          # Required because pacstrap verifies CachyOS packages against the
+          # BUILD HOST keyring. Signature verification is never disabled.
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman-key --recv-keys F3B607488DB35A47 --keyserver keyserver.ubuntu.com
+          pacman-key --lsign-key F3B607488DB35A47
+          pacman -Sy --noconfirm --needed --config ./pacman.conf \
+            cachyos-keyring cachyos-mirrorlist
+          pacman-key --populate cachyos
+
+      - name: Build
+        run: ./build.sh --native
+
+      - name: Inspect the artefact
+        id: inspect
+        run: ./scripts/inspect-iso.sh
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulationos-iso
+          path: |
+            out/*.iso
+            out/*.sha256
+            out/build-info.json
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: out/build.log
+          retention-days: 14
+          if-no-files-found: ignore

@@ -153,6 +153,18 @@ DUPES="$(printf '%s\n' "$PKGLIST" | sort | uniq -d)"
 [ -n "$DUPES" ] && err "duplicate package entries: $(echo "$DUPES" | tr '\n' ' ')"
 ok
 
+# Security posture of the shipped pacman configuration.
+for pc in pacman.conf airootfs/etc/pacman.conf; do
+    [ -f "$pc" ] || continue
+    grep -qE '^[[:space:]]*DisableSandbox' "$pc" \
+        && err "$pc sets DisableSandbox; the pacman sandbox must stay on in the committed profile (the emulated builder patches a throwaway copy instead)"
+    grep -qE '^[[:space:]]*SigLevel[[:space:]]*=.*Never' "$pc" \
+        && err "$pc disables signature verification (SigLevel ... Never)"
+    grep -qE '^[[:space:]]*SigLevel[[:space:]]*=[[:space:]]*Required' "$pc" \
+        || err "$pc does not set 'SigLevel = Required ...'"
+done
+ok
+
 # Packages known to have been dropped from the Arch repositories.
 for gone in broadcom-wl rofi-wayland libva-mesa-driver ckbcomp-nonfree; do
     has_pkg "$gone" && err "packages.x86_64 lists '$gone', which no longer exists in the Arch repositories"

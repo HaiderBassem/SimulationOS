@@ -27,7 +27,11 @@ bootmodes=('bios.syslinux'
            'uefi.systemd-boot')
 
 arch="x86_64"
-pacman_conf="pacman.conf"
+# Overridable so the emulated build container can supply a copy with
+# DisableSandbox set (pacman's seccomp sandbox returns EINVAL under qemu-user
+# emulation). The committed pacman.conf never disables the sandbox, and
+# validate-profile.sh enforces that.
+pacman_conf="${SIMOS_PACMAN_CONF:-pacman.conf}"
 airootfs_image_type="squashfs"
 airootfs_image_tool_options=('-comp' 'xz' '-Xbcj' 'x86' '-b' '1M' '-Xdict-size' '1M')
 bootstrap_tarball_compression=('zstd' '-c' '-T0' '--auto-threads=logical' '--long' '-19')

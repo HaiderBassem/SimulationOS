@@ -1,0 +1,85 @@
+# L1 - fast static validation. Runs on every push and PR.
+# Deliberately needs no container and no pacman, so it finishes in seconds.
+name: validate
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: Static validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+
+      - name: Validate profile
+        run: ./scripts/validate-profile.sh
+
+      - name: Shell syntax
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            head -1 "$f" | grep -qE '^#!.*(bash|sh)' || continue
+            bash -n "$f" || { echo "syntax error: $f"; fail=1; }
+          done < <(git ls-files | grep -vE '\.(md|png|svg|conf|desc|qml|css|jsonc)$')
+          exit $fail
+
+      - name: ShellCheck
+        run: |
+          shellcheck -S warning build.sh scripts/*.sh \
+            airootfs/usr/local/bin/simos-* \
+            airootfs/usr/local/bin/simulationos-install \
+            airootfs/usr/share/simulationos/calamares/scripts/simulationos-deloop
+
+      - name: Installer config is valid YAML
+        run: |
+          python3 - <<'PY'
+          import glob, sys, yaml
+          bad = 0
+          files = glob.glob("airootfs/usr/share/simulationos/calamares/**/*.conf", recursive=True)
+          files += glob.glob("airootfs/usr/share/simulationos/calamares/branding/*/branding.desc")
+          for f in files:
+              try:
+                  yaml.safe_load(open(f))
+              except Exception as e:
+                  print(f"YAML ERROR {f}: {e}"); bad = 1
+          print(f"checked {len(files)} installer config files")
+          sys.exit(bad)
+          PY
+
+      - name: Waybar config is valid JSON
+        run: |
+          python3 - <<'PY'
+          import json, re, sys
+          t = open("airootfs/etc/skel/.config/waybar/config.jsonc").read()
+          json.loads(re.sub(r'^\s*//.*$', '', t, flags=re.M))
+          print("waybar config.jsonc OK")
+          PY
+
+      - name: No secrets committed
+        run: |
+          # Deliberately narrow: private keys and obvious credential material.
+          if git grep -nIE 'BEGIN (RSA|OPENSSH|PGP|EC) PRIVATE KEY|ghp_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}' -- . ; then
+            echo "::error::possible secret committed"; exit 1
+          fi
+          echo "no secrets found"
+
+      - name: Validator must actually catch regressions
+        run: |
+          # A validator that never fails is worthless. Prove it still bites.
+          set -e
+          tmp=$(mktemp -d); cp -R . "$tmp/repo"; cd "$tmp/repo"
+          sed -i 's/vmlinuz-linux-cachyos/vmlinuz-linux/' efiboot/loader/entries/01-simulationos-linux.conf
+          if ./scripts/validate-profile.sh >/dev/null 2>&1; then
+            echo "::error::validator did NOT catch an injected kernel-name regression"; exit 1
+          fi
+          echo "validator correctly rejected the injected regression"
