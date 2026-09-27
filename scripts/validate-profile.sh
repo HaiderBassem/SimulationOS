@@ -144,6 +144,31 @@ else
     has_pkg mkinitcpio         || err "packages.x86_64 is missing mandatory package 'mkinitcpio'"
     has_pkg mkinitcpio-archiso || err "packages.x86_64 is missing mandatory package 'mkinitcpio-archiso'"
     ok
+
+    # Every mkinitcpio hook must have its support package, or mkinitcpio fails
+    # late in the build with "file not found: /usr/lib/initcpio/...".
+    MKCONF=airootfs/etc/mkinitcpio.conf.d/archiso.conf
+    if [ -f "$MKCONF" ]; then
+        HOOKS_LINE="$(sed -n 's/^HOOKS=(\(.*\))/\1/p' "$MKCONF")"
+        for h in $HOOKS_LINE; do
+            case "$h" in
+                archiso_pxe_common|archiso_pxe_nfs)
+                    has_pkg mkinitcpio-nfs-utils \
+                        || err "mkinitcpio hook '$h' needs 'mkinitcpio-nfs-utils' in packages.x86_64" ;;
+                archiso_pxe_nbd)
+                    has_pkg nbd \
+                        || err "mkinitcpio hook '$h' needs 'nbd' in packages.x86_64" ;;
+                archiso|archiso_loop_mnt|memdisk)
+                    has_pkg mkinitcpio-archiso \
+                        || err "mkinitcpio hook '$h' needs 'mkinitcpio-archiso'" ;;
+            esac
+        done
+        # A syslinux PXE config with no PXE hooks is dead configuration.
+        if [ -f syslinux/archiso_pxe.cfg ] && ! printf '%s' "$HOOKS_LINE" | grep -q archiso_pxe; then
+            err "syslinux/archiso_pxe.cfg exists but no archiso_pxe* mkinitcpio hook is enabled (dead PXE config)"
+        fi
+    fi
+    ok
 fi
 
 # ---------------------------------------------------------------------------
