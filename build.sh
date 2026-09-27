@@ -161,6 +161,8 @@ exec "$RUNTIME" run --rm -i \
     -w /simulationos \
     -e "SIMOS_VERBOSE=$VERBOSE" \
     -e "SIMOS_EMULATED=$EMULATED" \
+    -e "SIMOS_WORK_DIR=/var/tmp/simulationos-work" \
+    -e "SIMOS_OUT_DIR=/simulationos/out" \
     "$IMAGE" \
     bash -euo pipefail -c '
         printf "\033[36m==>\033[0m builder arch: $(uname -m)\n"

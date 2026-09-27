@@ -93,6 +93,26 @@ if [ -d "$WORK" ]; then
 fi
 mkdir -p -- "$WORK" "$OUT"
 
+# A case-insensitive work directory silently breaks the build ~40 minutes in:
+# xorg-server ships BOTH /usr/lib/Xorg (a file) and /usr/lib/xorg/ (a
+# directory), and pacman aborts with
+#   error: extract: not overwriting dir with file .../usr/lib/Xorg
+# This bites when the work directory is a bind mount from macOS (APFS) or a
+# Windows filesystem. Fail immediately, with the fix, instead.
+_case_probe="$WORK/.simos-case-probe"
+mkdir -p "$_case_probe/xorg"
+if [ -e "$_case_probe/XORG" ]; then
+    rm -rf -- "$_case_probe"
+    die "the work directory is on a CASE-INSENSITIVE filesystem: $WORK
+       Packages such as xorg-server ship /usr/lib/Xorg and /usr/lib/xorg/,
+       which collide there and abort pacstrap partway through the build.
+       Point SIMOS_WORK_DIR at a case-sensitive filesystem, e.g.:
+           SIMOS_WORK_DIR=/var/tmp/simulationos-work $0
+       (./build.sh already does this for containerised builds.)"
+fi
+rm -rf -- "$_case_probe"
+green "    work directory is case-sensitive"
+
 # -------------------------------------------------------------------- 5. build
 info "Running mkarchiso (this takes a while and needs ~20 GB free)"
 BUILD_LOG="$OUT/build.log"

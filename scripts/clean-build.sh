@@ -16,11 +16,22 @@ KEEP_ISO=0
 
 info() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
-# Guard rail: never operate outside the repository, however the env vars are set.
+# Guard rail. Paths inside the repository are always fine. Paths outside it
+# are allowed only when they are explicitly chosen build directories -
+# containerised builds put the work directory on a case-sensitive filesystem
+# such as /var/tmp - and never when they are a system directory.
 for target in "$WORK" "$OUT"; do
     case "$target" in
-        "$REPO"/*) ;;
-        *) printf 'refusing to delete %s: outside the repository\n' "$target" >&2; exit 1 ;;
+        "$REPO"/*)
+            ;;
+        /var/tmp/*|/tmp/*)
+            ;;
+        ""|/|/usr|/usr/*|/etc|/etc/*|/home|/home/*|/var|/var/*|/opt|/opt/*|/boot|/boot/*)
+            printf 'refusing to delete %s: system directory\n' "$target" >&2; exit 1 ;;
+        *)
+            printf 'refusing to delete %s: outside the repository and not a build directory\n' "$target" >&2
+            printf 'set SIMOS_WORK_DIR/SIMOS_OUT_DIR under the repo or /var/tmp\n' >&2
+            exit 1 ;;
     esac
 done
 
