@@ -128,6 +128,12 @@ ISO="$(ls -1t "$OUT"/simulationos-*.iso 2>/dev/null | head -1)"
 info "Generating SHA256 checksum"
 ( cd "$OUT" && sha256sum "$(basename "$ISO")" > "$(basename "$ISO").sha256" )
 
+# Derived from the produced filename (iso_name-iso_version-arch.iso), which is
+# ground truth, instead of re-sourcing profiledef.sh.
+ISO_BASE="$(basename "$ISO" .iso)"
+ISO_ARCH="${ISO_BASE##*-}"
+ISO_VERSION="${ISO_BASE%-*}"; ISO_VERSION="${ISO_VERSION##*-}"
+
 info "Writing build-info.json"
 # Everything a release engineer needs to answer "which commit produced this
 # exact file, with which tools".
@@ -136,8 +142,8 @@ cat > "$OUT/build-info.json" <<JSON
   "iso": "$(basename "$ISO")",
   "sha256": "$(cut -d" " -f1 < "$ISO.sha256")",
   "size_bytes": $(stat -c%s "$ISO" 2>/dev/null || stat -f%z "$ISO"),
-  "iso_version": "$(bash -c 'source "'"$REPO"'/profiledef.sh"; printf %s "$iso_version"')",
-  "target_arch": "$(bash -c 'source "'"$REPO"'/profiledef.sh"; printf %s "$arch"')",
+  "iso_version": "$ISO_VERSION",
+  "target_arch": "$ISO_ARCH",
   "git_commit": "$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo unknown)",
   "git_branch": "$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)",
   "git_dirty": $(test -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" && echo true || echo false),

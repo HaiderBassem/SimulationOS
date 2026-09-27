@@ -63,8 +63,9 @@ grep -q "$SFS_EXPECT" "$REPO/airootfs/usr/share/simulationos/calamares/modules/u
 
 # Boot loader payloads for the declared bootmodes.
 if grep -q "'bios.syslinux'" "$REPO/profiledef.sh"; then
-    printf '%s\n' "$LIST" | grep -q '^syslinux/' && ok "syslinux payload present (BIOS)" \
-        || err "bios.syslinux declared but no syslinux/ directory in the ISO"
+    # mkarchiso places syslinux under boot/syslinux/, not /syslinux/.
+    expect "boot/syslinux/isolinux.bin"
+    expect "boot/syslinux/archiso_sys-linux.cfg"
 fi
 if grep -q "'uefi.systemd-boot'" "$REPO/profiledef.sh"; then
     printf '%s\n' "$LIST" | grep -qi '^EFI/BOOT/BOOTX64.EFI$' && ok "EFI/BOOT/BOOTX64.EFI present (UEFI)" \
@@ -74,10 +75,27 @@ if grep -q "'uefi.systemd-boot'" "$REPO/profiledef.sh"; then
         || err "loader/entries/01-simulationos-linux.conf missing"
 fi
 
-# No stale Arch branding should reach a user-visible boot menu.
-if printf '%s\n' "$LIST" | grep -q '^loader/entries/'; then
-    :
-fi
+# The boot menus a user actually sees must say SimulationOS. Read them out of
+# the built ISO rather than trusting the source tree.
+TMPD="$(mktemp -d)"
+for entry in "boot/syslinux/archiso_sys-linux.cfg" "loader/entries/01-simulationos-linux.conf"; do
+    if printf '%s\n' "$LIST" | grep -qx -- "$entry"; then
+        if bsdtar -xOf "$ISO" "$entry" >"$TMPD/e" 2>/dev/null && [ -s "$TMPD/e" ]; then
+            grep -qi 'SimulationOS' "$TMPD/e" \
+                && ok "boot menu is branded SimulationOS ($entry)" \
+                || err "$entry contains no SimulationOS branding"
+            grep -qi 'Arch Linux install medium' "$TMPD/e" \
+                && err "$entry still carries the upstream Arch label"
+            # The kernel the menu points at must be the one in the ISO.
+            if grep -qiE 'vmlinuz-[a-z0-9.-]+' "$TMPD/e"; then
+                grep -qi "vmlinuz-${KPKG}" "$TMPD/e" \
+                    && ok "$entry references vmlinuz-${KPKG}" \
+                    || err "$entry references a kernel other than ${KPKG}"
+            fi
+        fi
+    fi
+done
+rm -rf -- "$TMPD"
 
 # ------------------------------------------------------------------ checksum
 if [ -f "$ISO.sha256" ]; then
