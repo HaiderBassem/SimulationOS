@@ -77,7 +77,8 @@ clean_log() {
       | sed -e 's/\x1b\][^\x07]*\x07//g' \
             -e 's/\x1b\][^\x1b]*\x1b\\//g' \
             -e 's/\x1b\[[0-9;?=]*[a-zA-Z]//g' \
-            -e 's/\r/\n/g'
+            -e 's/\r/\n/g' \
+      | awk '{gsub(/##BEGIN /,"\n##BEGIN "); gsub(/##END /,"\n##END "); print}'
 }
 
 wait_for() { # pattern, seconds
@@ -144,7 +145,7 @@ run sessions         'loginctl list-sessions --no-legend; loginctl list-users --
 run liveuser         'id liveuser'
 run hyprland         'pgrep -a Hyprland || echo NO_HYPRLAND'
 run session-procs    'pgrep -a -f "waybar|hyprpaper|mako|hyprpolkitagent|nm-applet" || echo NO_SESSION_PROCS'
-run portals          'pgrep -a -f "xdg-desktop-portal" || echo NO_PORTALS'
+run portals          'runuser -u liveuser -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus busctl --user introspect org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop >/dev/null 2>&1 && echo PORTAL_ACTIVATES || echo PORTAL_NO_ACTIVATE; pgrep -a -f xdg-desktop-portal || true'
 run networkmanager   'systemctl is-active NetworkManager; nmcli -t general status; nmcli -t device status'
 run dns              'getent hosts archlinux.org || echo DNS_FAIL'
 run pipewire         'runuser -u liveuser -- env XDG_RUNTIME_DIR=/run/user/1000 wpctl status 2>&1 | head -20 || echo WPCTL_FAIL'
