@@ -56,7 +56,7 @@ qemu-system-x86_64 \
     -display none -vga std \
     -serial "pipe:$PIPE" \
     -device virtio-net-pci,netdev=n0 -netdev user,id=n0 \
-    -device intel-hda -device hda-duplex -audiodev none,id=nosnd \
+    -audiodev none,id=nosnd -device intel-hda -device hda-duplex,audiodev=nosnd \
     -drive "file=$ISO,media=cdrom,readonly=on" -boot order=d -no-reboot &
 QPID=$!
 # shellcheck disable=SC2064
@@ -79,8 +79,17 @@ wait_for() { # pattern, seconds
 }
 
 info "Waiting for the login prompt"
-if ! wait_for 'simulationos login:|login:' "$TIMEOUT"; then
-    red "guest never reached a login prompt"; tail -30 "$LOG"; exit 1
+wait_for 'simulationos login:|login:' "$TIMEOUT"; rc=$?
+if [ "$rc" -eq 2 ]; then
+    red "QEMU exited before the guest reached a login prompt."
+    red "This is usually a QEMU invocation problem, not a SimulationOS problem."
+    red "Serial output captured so far:"; tail -30 "$LOG"
+    exit 1
+elif [ "$rc" -ne 0 ]; then
+    red "timed out after ${TIMEOUT}s waiting for a login prompt"
+    red "(hosted runners have no KVM, so this runs under TCG emulation)"
+    tail -30 "$LOG"
+    exit 1
 fi
 green "    login prompt reached"
 

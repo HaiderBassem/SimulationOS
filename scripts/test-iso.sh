@@ -31,6 +31,10 @@ usage: test-iso.sh [options] [path/to.iso]
   --boot-disk      boot ONLY the virtual disk (no ISO attached) - verifies
                    the installed system boots independently of the medium
   --ram MB         guest memory  (default 4096)
+
+Environment:
+  SIMOS_QEMU_AUDIODEV  QEMU audio backend (default "none" = silent but always
+                       works). Set to pa, alsa or coreaudio for real sound.
   --cpus N         guest vCPUs   (default 2)
 
 If no ISO path is given, the newest out/simulationos-*.iso is used.
@@ -76,7 +80,8 @@ QEMU=(qemu-system-x86_64
       -m "$RAM"
       -device virtio-vga-gl
       -display gtk,gl=on
-      -device intel-hda -device hda-duplex
+      -audiodev "${SIMOS_QEMU_AUDIODEV:-none},id=snd0"
+      -device intel-hda -device hda-duplex,audiodev=snd0
       -device virtio-net-pci,netdev=n0 -netdev user,id=n0
       -device qemu-xhci -device usb-tablet)
 
