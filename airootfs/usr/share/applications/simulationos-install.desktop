@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Install SimulationOS
+GenericName=System Installer
+Comment=Install SimulationOS to a disk
+Exec=/usr/local/bin/simulationos-install
+Icon=simulationos
+Terminal=false
+Categories=System;Settings;
+Keywords=install;installer;calamares;simulationos;
+StartupNotify=true

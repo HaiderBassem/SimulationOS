@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# SimulationOS power menu (wofi based).
+set -euo pipefail
+
+choice="$(printf '%s\n' \
+    'Lock session' \
+    'Log out' \
+    'Reboot' \
+    'Power off' \
+    | wofi --dmenu --prompt 'SimulationOS' --lines 5 --width 320)" || exit 0
+
+case "$choice" in
+    'Lock session')
+        hyprlock
+        ;;
+    'Log out')  hyprctl dispatch exit ;;
+    'Reboot')   systemctl reboot ;;
+    'Power off') systemctl poweroff ;;
+esac

@@ -1,0 +1,100 @@
+# L2/L3 - build the ISO in a clean environment and inspect the artefact.
+#
+# Runs ./build.sh, the same entry point developers use. build.sh detects that
+# the runner is not Arch and drives an x86_64 Arch container itself, so there
+# is exactly one build engine and CI cannot drift from local behaviour.
+name: iso
+
+on:
+  push:
+    branches: [main, 'feat/**']
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+  pull_request:
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    uses: ./.github/workflows/validate.yml
+
+  build:
+    name: Build ISO
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      iso_name: ${{ steps.meta.outputs.iso_name }}
+      iso_sha256: ${{ steps.meta.outputs.iso_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        # A 2.1 GB ISO plus a ~4 GB unpacked rootfs plus ~1.4 GB of packages
+        # does not fit alongside the runner's preinstalled toolchains.
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean || true
+          df -h /
+
+      - name: Install inspection tools
+        # inspect-iso.sh reads the ISO9660 filesystem with bsdtar, which
+        # ubuntu-latest does not ship (it lives in libarchive-tools).
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libarchive-tools
+
+      - name: Build (via ./build.sh)
+        run: ./build.sh
+
+      - name: Inspect the artefact
+        run: ./scripts/inspect-iso.sh
+
+      - name: Collect metadata
+        id: meta
+        run: |
+          iso="$(ls -1 out/simulationos-*.iso | head -1)"
+          echo "iso_name=$(basename "$iso")"      >> "$GITHUB_OUTPUT"
+          echo "iso_sha256=$(cut -d' ' -f1 < "$iso.sha256")" >> "$GITHUB_OUTPUT"
+          echo "### SimulationOS ISO"            >> "$GITHUB_STEP_SUMMARY"
+          echo '```json'                         >> "$GITHUB_STEP_SUMMARY"
+          cat out/build-info.json                >> "$GITHUB_STEP_SUMMARY"
+          echo '```'                             >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulationos-alpha-${{ github.sha }}-x86_64
+          path: |
+            out/*.iso
+            out/*.iso.sha256
+            out/build-info.json
+          retention-days: 14
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ github.sha }}
+          path: out/build.log
+          retention-days: 14
+          if-no-files-found: ignore
+
+  boot:
+    name: Boot test
+    needs: build
+    uses: ./.github/workflows/boot.yml
+    with:
+      artifact: simulationos-alpha-${{ github.sha }}-x86_64
+
+  acceptance:
+    name: Runtime acceptance
+    needs: [build, boot]
+    uses: ./.github/workflows/acceptance.yml
+    with:
+      artifact: simulationos-alpha-${{ github.sha }}-x86_64

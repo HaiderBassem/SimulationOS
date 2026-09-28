@@ -1,133 +1,193 @@
-alsa-utils
-amd-ucode
-arch-install-scripts
-archinstall
-b43-fwcutter
+# SimulationOS package list (x86_64)
+#
+# Grouped by purpose. Every entry is expected to resolve from:
+#   [core] [extra] [multilib]  -> Arch Linux
+#   [cachyos]                  -> CachyOS (kernel, installer, keyring/mirrorlist)
+# scripts/validate-profile.sh checks this file for structural problems;
+# pacman resolves availability at build time.
+
+## ---------------------------------------------------------------- base system
 base
-bcachefs-tools
-bind
-bolt
-brltty
-broadcom-wl
-btrfs-progs
-clonezilla
-cloud-init
-cryptsetup
-darkhttpd
-ddrescue
-dhcpcd
-diffutils
-dmidecode
-dmraid
-dnsmasq
-dosfstools
-e2fsprogs
-edk2-shell
-efibootmgr
-espeakup
-ethtool
-exfatprogs
-f2fs-tools
-fatresize
-foot-terminfo
-fsarchiver
-gpart
-gpm
-gptfdisk
-grml-zsh-config
-grub
-hdparm
-hyperv
-intel-ucode
-irssi
-iw
-iwd
-jfsutils
-kitty-terminfo
-ldns
+bash
+sudo
 less
-lftp
-libfido2
-libusb-compat
-#linux
-linux-cachyos
-linux-cachyos-headers
-linux-atm
-linux-firmware
-linux-firmware-marvell
-livecd-sounds
-lsscsi
-lvm2
-lynx
 man-db
 man-pages
-mc
-mdadm
-memtest86+
-memtest86+-efi
+nano
+neovim
+git
+curl
+wget
+rsync
+unzip
+zip
+p7zip
+which
+htop
+btop
+fastfetch
+usbutils
+lsscsi
+diffutils
+pv
+screen
+tmux
+terminus-font
+kitty-terminfo
+eza
+
+## ---------------------------------------------------------- kernel & firmware
+# SimulationOS ships the CachyOS kernel. pkgbase is "linux-cachyos", so the
+# installed files are /boot/vmlinuz-linux-cachyos and
+# /boot/initramfs-linux-cachyos.img, and mkinitcpio generates
+# /etc/mkinitcpio.d/linux-cachyos.preset. Boot entries must match those names.
+linux-cachyos
+linux-firmware
+linux-firmware-marvell
+sof-firmware
+amd-ucode
+intel-ucode
+# mkinitcpio and mkinitcpio-archiso are mandatory for archiso.
 mkinitcpio
 mkinitcpio-archiso
-mkinitcpio-nfs-utils
-mmc-utils
-modemmanager
-mtools
-nano
-nbd
-ndisc6
-nfs-utils
-nilfs-utils
-nmap
-ntfs-3g
-nvme-cli
-open-iscsi
-open-vm-tools
-openconnect
-openpgp-card-tools
-openssh
-openvpn
-partclone
-parted
-partimage
-pcsclite
-ppp
-pptpclient
-pv
-qemu-guest-agent
-refind
-reflector
-rsync
-rxvt-unicode-terminfo
-screen
-sdparm
-sequoia-sq
-sg3_utils
-smartmontools
-sof-firmware
-squashfs-tools
-sudo
-syslinux
-systemd-resolvconf
-tcpdump
-terminus-font
-testdisk
-tmux
-tpm2-tools
-tpm2-tss
-udftools
-usb_modeswitch
-usbmuxd
-usbutils
-neovim
-virtualbox-guest-utils-nox
-vpnc
-wireless-regdb
-wireless_tools
-wpa_supplicant
-wvdial
-xdg-utils
-xfsprogs
-xl2tpd
-bash
-eza
+
+## ---------------------------------------------------------------- CachyOS repo
+# Needed so the live system *and* the installed system keep working access to
+# the repository the kernel came from.
 cachyos-keyring
 cachyos-mirrorlist
+archlinux-keyring
+
+## -------------------------------------------------------------------- graphics
+mesa
+mesa-utils
+vulkan-radeon
+vulkan-intel
+vulkan-swrast
+vulkan-tools
+
+## ------------------------------------------------------------ Hyprland desktop
+hyprland
+hyprpaper
+hyprpolkitagent
+hyprlock
+waybar
+kitty
+wofi
+thunar
+thunar-volman
+gvfs
+mako
+libnotify
+grim
+slurp
+wl-clipboard
+cliphist
+brightnessctl
+polkit
+xdg-desktop-portal
+xdg-desktop-portal-hyprland
+xdg-desktop-portal-gtk
+xdg-user-dirs
+xdg-utils
+qt5-wayland
+qt6-wayland
+xorg-xwayland
+
+## ----------------------------------------------------------------------- fonts
+ttf-dejavu
+ttf-fira-sans
+ttf-jetbrains-mono-nerd
+ttf-nerd-fonts-symbols
+noto-fonts
+noto-fonts-emoji
+
+## ----------------------------------------------------------------------- themes
+adwaita-icon-theme
+papirus-icon-theme
+
+## ------------------------------------------------------------- display manager
+sddm
+
+## ------------------------------------------------------------------------ audio
+pipewire
+pipewire-alsa
+pipewire-pulse
+pipewire-jack
+wireplumber
+pavucontrol
+alsa-utils
+
+## ---------------------------------------------------------------------- network
+networkmanager
+network-manager-applet
+nm-connection-editor
+wpa_supplicant
+wireless-regdb
+wireless_tools
+iw
+ethtool
+bind
+tcpdump
+nmap
+openssh
+modemmanager
+usb_modeswitch
+b43-fwcutter
+
+## -------------------------------------------------------------------- bluetooth
+bluez
+bluez-utils
+blueman
+
+## ------------------------------------------------------- filesystems & storage
+btrfs-progs
+e2fsprogs
+xfsprogs
+f2fs-tools
+exfatprogs
+dosfstools
+ntfs-3g
+nvme-cli
+mtools
+gptfdisk
+parted
+cryptsetup
+lvm2
+mdadm
+hdparm
+sdparm
+smartmontools
+squashfs-tools
+dmidecode
+
+## -------------------------------------------------------------------- recovery
+ddrescue
+testdisk
+partclone
+fsarchiver
+memtest86+
+memtest86+-efi
+
+## ------------------------------------------------------------------- installer
+# cachyos-calamares provides /usr/bin/calamares (provides=calamares).
+# SimulationOS supplies its own config tree, see
+# airootfs/usr/share/simulationos/calamares/.
+cachyos-calamares
+gparted
+inxi
+arch-install-scripts
+grub
+efibootmgr
+syslinux
+
+## -------------------------------------------------------------- accessibility
+brltty
+espeakup
+livecd-sounds
+
+## ------------------------------------------------------------- VM guest agents
+hyperv
+open-vm-tools
+qemu-guest-agent
+virtualbox-guest-utils-nox

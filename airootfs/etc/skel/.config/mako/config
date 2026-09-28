@@ -1,0 +1,16 @@
+# SimulationOS - mako notification daemon
+font=Fira Sans 10
+background-color=#14161ae6
+text-color=#e6e6e6
+border-color=#1793d1
+border-size=2
+border-radius=8
+padding=10
+margin=8
+default-timeout=6000
+anchor=top-right
+width=360
+
+[urgency=critical]
+border-color=#c0392b
+default-timeout=0
