@@ -136,6 +136,9 @@ run() {
     fi
 }
 
+info "Waiting for the graphical session to settle (inside the guest)"
+run wait-desktop 'for i in $(seq 1 120); do if systemctl is-active --quiet graphical.target && pgrep -f waybar >/dev/null 2>&1 && pgrep -x Hyprland >/dev/null 2>&1; then echo DESKTOP_READY; break; fi; sleep 5; done; systemctl is-active graphical.target' 900
+
 info "Collecting live-system state"
 run default-target   'systemctl get-default'
 run failed-units     'systemctl --failed --no-legend --plain'
@@ -170,14 +173,15 @@ assert() { # label, section, pattern
 }
 report() { printf '  ----- %s\n' "$1"; sect "$1" | sed '1d;$d' | sed 's/^/        /' | head -25; }
 
+assert "desktop reached readiness"   wait-desktop   'DESKTOP_READY'
 assert "default target is graphical" default-target 'graphical.target'
-assert "graphical.target active"     graphical      '^active'
-assert "display-manager active"      displaymanager '^active'
+assert "graphical.target active"     graphical      '^active$'
+assert "display-manager active"      displaymanager '^active$'
 assert "liveuser exists"             liveuser       'uid=1000'
 assert "Hyprland running"            hyprland       'Hyprland'
 assert "session components running"  session-procs  'waybar|hyprpaper|mako|hyprpolkitagent'
-assert "xdg-desktop-portal running"  portals        'xdg-desktop-portal'
-assert "NetworkManager active"       networkmanager '^active'
+assert "xdg-desktop-portal present"  portals        'PORTAL_ACTIVATES|xdg-desktop-portal'
+assert "NetworkManager active"       networkmanager '^active$'
 assert "DNS resolves"                dns            'archlinux\.org'
 assert "PipeWire running"            pipewire       'PipeWire|Audio'
 assert "Calamares installed"         calamares-bin  'CALAMARES_PRESENT'
