@@ -4,3 +4,4 @@
 # local pacman package cache used by the containerised builder
 /.cache/
 /artifacts/
+.DS_Store
