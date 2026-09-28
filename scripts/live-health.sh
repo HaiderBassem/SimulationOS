@@ -54,6 +54,8 @@ info "Booting $(basename "$ISO") for live health checks (timeout ${TIMEOUT}s)"
 qemu-system-x86_64 \
     -machine "q35,accel=$ACCEL" -cpu max -smp 2 -m "$RAM" \
     -display none -vga std \
+    -drive "if=pflash,format=raw,unit=0,readonly=on,file=$OVMF_CODE" \
+    -drive "if=pflash,format=raw,unit=1,file=$VARS" \
     -serial "pipe:$PIPE" \
     -device virtio-net-pci,netdev=n0 -netdev user,id=n0 \
     -audiodev none,id=nosnd -device intel-hda -device hda-duplex,audiodev=nosnd \
@@ -68,11 +70,21 @@ CATPID=$!
 exec 3>"$PIPE.in"
 say() { printf '%s\n' "$1" >&3; }
 
+# Strip NULs, CSI colour codes, OSC sequences (systemd shell integration)
+# and turn CR into LF so line anchors mean what they say.
+clean_log() {
+    tr -d '\000' < "$LOG" \
+      | sed -e 's/\x1b\][^\x07]*\x07//g' \
+            -e 's/\x1b\][^\x1b]*\x1b\\//g' \
+            -e 's/\x1b\[[0-9;?=]*[a-zA-Z]//g' \
+            -e 's/\r/\n/g'
+}
+
 wait_for() { # pattern, seconds
     local deadline=$(( $(date +%s) + $2 ))
     while [ "$(date +%s)" -lt "$deadline" ]; do
         kill -0 "$QPID" 2>/dev/null || return 2
-        grep -aqE "$1" "$LOG" && return 0
+        clean_log | grep -aqE "$1" && return 0
         sleep 3
     done
     return 1
@@ -151,8 +163,7 @@ kill "$QPID" 2>/dev/null; kill "$CATPID" 2>/dev/null
 # ------------------------------------------------------------------- verdict
 printf '\n== live system acceptance\n'
 ERRORS=0
-sect() { tr -d '\000' < "$LOG" | sed 's/\x1b\[[0-9;?=]*[a-zA-Z]//g' \
-             | sed -n "/^##BEGIN $1\$/,/^##END $1\$/p" 2>/dev/null; }
+sect() { clean_log | sed -n "/^##BEGIN $1\$/,/^##END $1\$/p" 2>/dev/null; }
 assert() { # label, section, pattern
     if sect "$2" | grep -aqE "$3"; then green "  ok      $1"; else red "  FAILED  $1"; ERRORS=$((ERRORS+1)); fi
 }
