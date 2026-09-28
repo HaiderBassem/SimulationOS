@@ -97,32 +97,40 @@ green "    login prompt reached"
 # the checks can be located unambiguously in the log.
 say ""; sleep 2
 say "root"; sleep 8
-say "export PS1=; stty -echo 2>/dev/null; echo SIMOS_SHELL_READY"
+say "export PS1= PAGER=cat SYSTEMD_PAGER=cat SYSTEMD_PAGERSECURE=0 SYSTEMD_COLORS=0 TERM=dumb; stty -echo 2>/dev/null; echo SIMOS_SHELL_READY"
 if ! wait_for 'SIMOS_SHELL_READY' 180; then
     red "serial root login failed"; tail -30 "$LOG"; exit 1
 fi
 green "    serial root shell obtained"
 
-run() { say "echo '##BEGIN $1'; { $2 ; } 2>&1; echo '##END $1'"; sleep "${3:-6}"; }
+# Send a command and wait for its END marker, so slow guests cannot cause
+# commands to interleave. Never blocks forever.
+run() {
+    local label="$1" cmd="$2" limit="${3:-120}"
+    say "echo '##BEGIN $label'; { $cmd ; } 2>&1; echo '##END $label'"
+    if ! wait_for "##END $label" "$limit"; then
+        printf '  (timed out collecting %s)\n' "$label" >&2
+    fi
+}
 
 info "Collecting live-system state"
-run default-target   'systemctl get-default'                                  5
-run failed-units     'systemctl --failed --no-legend --plain'                 8
-run graphical        'systemctl is-active graphical.target'                   5
-run displaymanager   'systemctl is-active display-manager.service; systemctl is-active sddm.service' 6
-run sessions         'loginctl list-sessions --no-legend; loginctl list-users --no-legend' 6
-run liveuser         'id liveuser'                                            5
-run hyprland         'pgrep -a Hyprland || echo NO_HYPRLAND'                   5
-run session-procs    'pgrep -a -f "waybar|hyprpaper|mako|hyprpolkitagent|nm-applet" || echo NO_SESSION_PROCS' 5
-run portals          'pgrep -a -f "xdg-desktop-portal" || echo NO_PORTALS'     5
-run networkmanager   'systemctl is-active NetworkManager; nmcli -t general status; nmcli -t device status' 8
-run dns              'getent hosts archlinux.org || echo DNS_FAIL'            10
-run pipewire         'runuser -u liveuser -- env XDG_RUNTIME_DIR=/run/user/1000 wpctl status 2>&1 | head -20 || echo WPCTL_FAIL' 8
-run calamares-bin    'test -x /usr/bin/calamares && echo CALAMARES_PRESENT || echo CALAMARES_MISSING' 5
-run calamares-cfg    'test -f /usr/share/simulationos/calamares/settings.conf && echo CALAMARES_CFG_PRESENT || echo CALAMARES_CFG_MISSING' 5
-run desktop-entry    'test -f /usr/share/applications/simulationos-install.desktop && echo DESKTOP_PRESENT || echo DESKTOP_MISSING' 5
-run sddm-journal     'journalctl -u sddm --no-pager -n 25 2>&1 | tail -25'    8
-run hypr-journal     'journalctl --no-pager -n 25 -g -i hyprland 2>&1 | tail -25 || true' 8
+run default-target   'systemctl get-default'
+run failed-units     'systemctl --failed --no-legend --plain'
+run graphical        'systemctl is-active graphical.target'
+run displaymanager   'systemctl is-active display-manager.service; systemctl is-active sddm.service'
+run sessions         'loginctl list-sessions --no-legend; loginctl list-users --no-legend'
+run liveuser         'id liveuser'
+run hyprland         'pgrep -a Hyprland || echo NO_HYPRLAND'
+run session-procs    'pgrep -a -f "waybar|hyprpaper|mako|hyprpolkitagent|nm-applet" || echo NO_SESSION_PROCS'
+run portals          'pgrep -a -f "xdg-desktop-portal" || echo NO_PORTALS'
+run networkmanager   'systemctl is-active NetworkManager; nmcli -t general status; nmcli -t device status'
+run dns              'getent hosts archlinux.org || echo DNS_FAIL'
+run pipewire         'runuser -u liveuser -- env XDG_RUNTIME_DIR=/run/user/1000 wpctl status 2>&1 | head -20 || echo WPCTL_FAIL'
+run calamares-bin    'test -x /usr/bin/calamares && echo CALAMARES_PRESENT || echo CALAMARES_MISSING'
+run calamares-cfg    'test -f /usr/share/simulationos/calamares/settings.conf && echo CALAMARES_CFG_PRESENT || echo CALAMARES_CFG_MISSING'
+run desktop-entry    'test -f /usr/share/applications/simulationos-install.desktop && echo DESKTOP_PRESENT || echo DESKTOP_MISSING'
+run sddm-journal     'journalctl -u sddm --no-pager -n 25 2>&1 | tail -25'
+run hypr-journal     'journalctl --no-pager -b -n 200 2>&1 | grep -i -m 20 hyprland || echo NO_HYPRLAND_JOURNAL'
 
 say "echo SIMOS_CHECKS_DONE"
 wait_for 'SIMOS_CHECKS_DONE' 240 || red "checks did not complete cleanly (log may be partial)"
