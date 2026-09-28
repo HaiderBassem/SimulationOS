@@ -97,18 +97,28 @@ green "    login prompt reached"
 # the checks can be located unambiguously in the log.
 say ""; sleep 2
 say "root"; sleep 8
-say "export PS1= PAGER=cat SYSTEMD_PAGER=cat SYSTEMD_PAGERSECURE=0 SYSTEMD_COLORS=0 TERM=dumb; stty -echo 2>/dev/null; echo SIMOS_SHELL_READY"
-if ! wait_for 'SIMOS_SHELL_READY' 180; then
+say "export PS1= PAGER=cat SYSTEMD_PAGER=cat SYSTEMD_PAGERSECURE=0 SYSTEMD_COLORS=0 TERM=dumb"
+sleep 3
+say "stty -echo 2>/dev/null; printf 'SIMOS_SHELL_%s\\n' READY"
+if ! wait_for '^SIMOS_SHELL_READY' 240; then
     red "serial root login failed"; tail -30 "$LOG"; exit 1
 fi
 green "    serial root shell obtained"
 
 # Send a command and wait for its END marker, so slow guests cannot cause
 # commands to interleave. Never blocks forever.
+# The serial line echoes whatever we type. If the marker literals appeared in
+# the command text, every marker would match the ECHO rather than the output:
+# wait_for would return instantly and the assertions would match echoed
+# command text instead of real results (a silent false pass).
+#
+# So the markers are ASSEMBLED AT RUNTIME with printf. The typed line contains
+# "##BEG%s"/"##EN%s"; only genuine guest output can contain "##BEGIN label"
+# and "##END label".
 run() {
-    local label="$1" cmd="$2" limit="${3:-120}"
-    say "echo '##BEGIN $label'; { $cmd ; } 2>&1; echo '##END $label'"
-    if ! wait_for "##END $label" "$limit"; then
+    local label="$1" cmd="$2" limit="${3:-180}"
+    say "printf '##BEG%s %s\\n' IN $label; { $cmd ; } 2>&1; printf '##EN%s %s\\n' D $label"
+    if ! wait_for "^##END $label" "$limit"; then
         printf '  (timed out collecting %s)\n' "$label" >&2
     fi
 }
@@ -141,7 +151,8 @@ kill "$QPID" 2>/dev/null; kill "$CATPID" 2>/dev/null
 # ------------------------------------------------------------------- verdict
 printf '\n== live system acceptance\n'
 ERRORS=0
-sect() { sed -n "/##BEGIN $1/,/##END $1/p" "$LOG" 2>/dev/null; }
+sect() { tr -d '\000' < "$LOG" | sed 's/\x1b\[[0-9;?=]*[a-zA-Z]//g' \
+             | sed -n "/^##BEGIN $1\$/,/^##END $1\$/p" 2>/dev/null; }
 assert() { # label, section, pattern
     if sect "$2" | grep -aqE "$3"; then green "  ok      $1"; else red "  FAILED  $1"; ERRORS=$((ERRORS+1)); fi
 }
