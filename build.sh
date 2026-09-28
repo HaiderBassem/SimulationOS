@@ -48,7 +48,8 @@ usage: ./build.sh [options]
 
 Environment:
   SIMOS_BUILDER_IMAGE   builder image        (default docker.io/archlinux:latest)
-  SIMOS_CONTAINER       podman | docker      (default: whichever is present)
+  SIMOS_CONTAINER       container runtime    (default: a runtime that can mount,
+                        e.g. "docker" or "sudo podman"; rootless podman cannot)
   SIMOS_WORK_DIR        work directory       (default ./work)
   SIMOS_OUT_DIR         output directory     (default ./out)
 
@@ -121,17 +122,45 @@ if [ "$MODE" = "native" ]; then
 fi
 
 # ----------------------------------------------------------- container build
-RUNTIME="${SIMOS_CONTAINER:-}"
-if [ -z "$RUNTIME" ]; then
-    for c in podman docker; do
-        command -v "$c" >/dev/null 2>&1 && { RUNTIME="$c"; break; }
-    done
+# pacstrap bind-mounts /dev inside the chroot, which needs real CAP_SYS_ADMIN
+# on the host. A ROOTLESS podman cannot provide that even with --privileged:
+#   mount: .../airootfs/dev: permission denied
+#   ==> ERROR: failed to setup chroot
+# GitHub's ubuntu-latest ships rootless podman alongside a rootful docker, so
+# the runtime is chosen by capability, not by name order.
+RUNTIME=()
+if [ -n "${SIMOS_CONTAINER:-}" ]; then
+    # Explicit override: honour it verbatim, including "sudo podman".
+    read -r -a RUNTIME <<<"$SIMOS_CONTAINER"
+else
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        RUNTIME=(docker)
+    elif command -v podman >/dev/null 2>&1; then
+        if [ "$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null)" = "true" ]; then
+            if [ "$(id -u)" -eq 0 ]; then
+                RUNTIME=(podman)
+            elif sudo -n true 2>/dev/null; then
+                info "podman is rootless; using 'sudo podman' so pacstrap can mount /dev"
+                RUNTIME=(sudo podman)
+            else
+                die "podman here is ROOTLESS and docker is unavailable.
+       pacstrap must bind-mount /dev inside the chroot, which rootless
+       containers cannot do even with --privileged. Either:
+         - install/start docker, or
+         - run: sudo ./build.sh, or
+         - set SIMOS_CONTAINER='sudo podman'"
+            fi
+        else
+            RUNTIME=(podman)
+        fi
+    fi
 fi
-[ -n "$RUNTIME" ] || die "no container runtime found. Install podman or docker,
+
+[ "${#RUNTIME[@]}" -gt 0 ] || die "no usable container runtime found. Install docker or podman,
        or build on an Arch Linux $TARGET_ARCH host and use --native."
 
-"$RUNTIME" info >/dev/null 2>&1 \
-    || die "$RUNTIME is installed but its daemon is not responding. Start it and retry."
+"${RUNTIME[@]}" info >/dev/null 2>&1 \
+    || die "${RUNTIME[*]} is installed but not responding. Start it and retry."
 
 EMULATED=0
 if [ "$HOST_ARCH" != "$TARGET_ARCH" ]; then
@@ -152,8 +181,8 @@ fi
 
 # mkarchiso needs loop devices, mount and squashfs; those require elevated
 # container privileges. This is the same model CachyOS uses in its CI.
-info "Starting $RUNTIME builder ($IMAGE, platform linux/amd64)"
-exec "$RUNTIME" run --rm -i \
+info "Starting ${RUNTIME[*]} builder ($IMAGE, platform linux/amd64)"
+exec "${RUNTIME[@]}" run --rm -i \
     --platform linux/amd64 \
     --privileged \
     -v "$REPO:/simulationos" \
