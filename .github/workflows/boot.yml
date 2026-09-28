@@ -7,6 +7,11 @@ name: boot-test
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      artifact:
+        description: Name of the ISO artifact to boot
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -34,7 +39,7 @@ jobs:
       - name: Download the ISO built by this pipeline
         uses: actions/download-artifact@v4
         with:
-          name: simulationos-iso
+          name: ${{ inputs.artifact }}
           path: out
 
       - name: Enable KVM if the runner provides it
