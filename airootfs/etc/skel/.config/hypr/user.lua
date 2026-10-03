@@ -1,0 +1,10 @@
+-- SimulationOS - personal Hyprland settings.
+--
+-- Loaded at the END of hyprland.lua, so anything set here wins.
+-- It is intentionally empty by default.
+--
+-- Examples:
+--   hl.monitor({ output = "eDP-1",    mode = "1920x1080@60", position = "0x0",    scale = 1 })
+--   hl.monitor({ output = "HDMI-A-1", mode = "preferred",    position = "1920x0", scale = 1 })
+--   hl.config({ input = { kb_layout = "us,de" } })
+--   hl.bind("SUPER + B", hl.dsp.exec_cmd("firefox"))
