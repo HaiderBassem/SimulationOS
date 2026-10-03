@@ -51,6 +51,9 @@ command -v curl   >/dev/null || die "curl not found"
 TMP="$(mktemp -d)"
 trap 'rm -rf -- "$TMP"' EXIT
 mkdir -p "$TMP/db" "$TMP/cache" "$TMP/cal" "$TMP/boost" "$TMP/old"
+# pacman downloads as an unprivileged sandbox user, which must be able to
+# reach the cache directory; mktemp -d creates it 0700.
+chmod 755 "$TMP" "$TMP/cache"
 
 # Always start from a clean slate: a stale compat directory from an earlier
 # build must not survive a Calamares rebuild that made it unnecessary.
