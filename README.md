@@ -134,9 +134,14 @@ SimulationOS/
 │   ├── validate-profile.sh       static consistency checks
 │   ├── build-iso.sh              environment checks + mkarchiso + checksum
 │   ├── clean-build.sh            remove work/ and out/
+│   ├── calamares-compat.sh       build step: make sure the installer can load its libraries
 │   ├── inspect-iso.sh            L3 artefact inspection
-│   ├── test-iso.sh               boot it in QEMU (UEFI or BIOS)
-│   └── make-wallpaper.py         regenerate the wallpaper asset
+│   ├── boot-test.sh              L4 headless boot (UEFI + BIOS)
+│   ├── live-health.sh            L4b live desktop health (renders, no config errors, installer loads)
+│   ├── deloop-test.sh            L4b image contracts (de-live, initramfs, Hyprland verifier)
+│   ├── install-test.py           L5 real graphical install + boot of the installed disk
+│   ├── test-iso.sh               boot it in QEMU yourself (UEFI or BIOS)
+│   └── make-branding.py          regenerate wallpapers, logos and the fastfetch logo
 │
 ├── .github/workflows/
 │   ├── validate.yml              L1 static validation (seconds, no container)
@@ -208,8 +213,29 @@ build.log
 ./scripts/test-iso.sh --boot-disk     # boot ONLY that disk, no ISO
 ```
 
-The last two are the real acceptance test: install to the disk, then boot the
-disk with no medium attached.
+The last two are the manual acceptance test: install to the disk, then boot
+the disk with no medium attached.
+
+**Graphics in a VM.** Hyprland needs a virtual GPU. `test-iso.sh` uses
+virtio-gpu (`virtio-vga-gl` with 3D on Linux, plain `virtio-vga` with software
+rendering on macOS). With a plain VGA adapter (`-vga std`, or a hypervisor's
+"standard VGA") Hyprland starts but has no renderer and the screen stays
+black. In VirtualBox/VMware enable 3D acceleration; in virt-manager use
+"Virtio" video.
+
+### Automated installation test
+
+```bash
+./scripts/install-test.py             # needs qemu, OVMF and tesseract
+```
+
+Drives the whole journey unattended, the way CachyOS tests its installer
+(keyboard and mouse through QEMU, OCR to read the screen): boot the ISO, open
+"Install SimulationOS" from the desktop, click through Calamares, install to a
+blank disk (UEFI + GPT + ext4 + GRUB), power off, **boot the disk without the
+ISO**, log in through SDDM, assert on the running system, reboot, and power
+off. Screenshots of every step, logs and the result matrix land in
+`out/install-test/`. CI runs this on every push (`acceptance.yml`).
 
 ---
 
@@ -228,21 +254,35 @@ Firmware → syslinux (BIOS) / systemd-boot (UEFI)
 **Installation**
 
 ```
-Live session → "Install SimulationOS" → Calamares
+Live session → "Install SimulationOS" (bar button / application menu)
+  → simulationos-install: preflight (install source, libraries, display)
+  → pkexec → Calamares
   → partition → mount → unpackfs (copy the live SquashFS)
-  → users → networkcfg → services-systemd → packages (drop the installer)
-  → removeuser (liveuser) → simulationos-deloop (strip live config)
-  → initcpiocfg → initcpio (rebuild a NON-archiso initramfs)
-  → grubcfg → bootloader (GRUB) → umount
-  → reboot into the installed system
+  → machineid → fstab → locale → keyboard → localecfg
+  → removeuser (liveuser)
+  → simulationos-deloop (strip live config, install the kernel into /boot,
+                         drop the archiso mkinitcpio config, pacman keyring)
+  → initcpiocfg → initcpio (a NORMAL, non-archiso initramfs)
+  → users → networkcfg → displaymanager → hwclock → services-systemd
+  → packages (remove installer-only packages)
+  → grubcfg → bootloader (GRUB on the target ESP)
+  → simulationos-verify-target (refuse to report success for an unbootable
+                                or still-live system)
+  → umount → reboot into the installed system
 ```
 
 Because the offline installer copies the live filesystem verbatim, the target
 initially inherits every live concession. `simulationos-deloop` removes them:
 SDDM autologin, tty autologin, NOPASSWD sudo (replaced by a password-prompting
-`%wheel` rule), the permissive polkit rule, the archiso initramfs hook,
-archiso-only units, `/home/liveuser` — and it **locks the root account**, which
-the live medium leaves passwordless.
+`%wheel` rule), the permissive polkit rule, the archiso initramfs
+configuration, archiso-only units, `/home/liveuser` — and it **locks the root
+account**, which the live medium leaves passwordless. It runs *before* the
+initramfs is generated; the reverse order would bake the live-medium hooks
+into the installed system. It exits non-zero if a security- or boot-critical
+step cannot be completed, which fails the installation visibly.
+
+The supported ("golden") path for Alpha is deliberately narrow:
+**x86_64, UEFI, GPT, ext4, GRUB, offline install.**
 
 ---
 
@@ -255,6 +295,14 @@ the live medium leaves passwordless.
   SquashFS; there is no online package selection.
 - **Bootloaders:** the installed system always gets GRUB. No systemd-boot,
   rEFInd or Limine choice.
+- **Filesystems:** the installer offers ext4 only until that path has a clean
+  record; btrfs/xfs/f2fs are not offered.
+- **Virtual machines need a virtual GPU** (virtio-gpu, or 3D acceleration
+  enabled). This is a Hyprland requirement; see "Test in a VM".
+- **Installer library compatibility:** `cachyos-calamares` can lag behind an
+  Arch Boost update. The build detects this and stages the matching,
+  signature-verified Boost libraries for the installer only
+  (`scripts/calamares-compat.sh`).
 - **No disk encryption flow** has been exercised, though the LUKS-capable
   Calamares modules and `cryptsetup` are present.
 - **Secure Boot** is not supported.
