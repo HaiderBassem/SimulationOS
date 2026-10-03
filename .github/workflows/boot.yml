@@ -42,11 +42,8 @@ jobs:
           name: ${{ inputs.artifact }}
           path: out
 
-      - name: Enable KVM if the runner provides it
-        run: |
-          # Hosted runners usually have no nested virtualisation; TCG is the
-          # fallback and is slow but correct.
-          [ -e /dev/kvm ] && echo "KVM available" || echo "no /dev/kvm; using TCG"
+      - name: Enable KVM
+        run: ./.github/enable-kvm.sh
 
       - name: Boot test
         env:

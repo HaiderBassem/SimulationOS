@@ -38,7 +38,12 @@ jobs:
           shellcheck -S warning build.sh scripts/*.sh \
             airootfs/usr/local/bin/simos-* \
             airootfs/usr/local/bin/simulationos-install \
-            airootfs/usr/share/simulationos/calamares/scripts/simulationos-deloop
+            airootfs/usr/share/simulationos/calamares/scripts/simulationos-deloop \
+            airootfs/usr/share/simulationos/calamares/scripts/simulationos-verify-target \
+            .github/enable-kvm.sh
+
+      - name: Python tooling compiles
+        run: python3 -m py_compile scripts/install-test.py scripts/make-branding.py
 
       - name: Installer config is valid YAML
         run: |
@@ -82,4 +87,28 @@ jobs:
           if ./scripts/validate-profile.sh >/dev/null 2>&1; then
             echo "::error::validator did NOT catch an injected kernel-name regression"; exit 1
           fi
-          echo "validator correctly rejected the injected regression"
+          echo "validator correctly rejected the injected kernel-name regression"
+
+          # Generating the initramfs BEFORE de-living bakes the archiso hooks
+          # into the installed system. The validator must refuse that order.
+          git checkout -q -- .
+          python3 - <<'PY'
+          import re
+          p = "airootfs/usr/share/simulationos/calamares/settings.conf"
+          s = open(p).read()
+          s = s.replace("  - shellprocess@deloop\n  - initcpiocfg\n  - initcpio\n",
+                        "  - initcpiocfg\n  - initcpio\n  - shellprocess@deloop\n")
+          open(p, "w").write(s)
+          PY
+          if ./scripts/validate-profile.sh >/dev/null 2>&1; then
+            echo "::error::validator did NOT catch initramfs-before-deloop ordering"; exit 1
+          fi
+          echo "validator correctly rejected initramfs generation before de-living"
+
+          # A legacy hyprland.conf means config errors on every login.
+          git checkout -q -- .
+          printf 'windowrulev2 = float, class:^(x)$\n' > airootfs/etc/skel/.config/hypr/hyprland.conf
+          if ./scripts/validate-profile.sh >/dev/null 2>&1; then
+            echo "::error::validator did NOT catch a legacy hyprland.conf"; exit 1
+          fi
+          echo "validator correctly rejected a legacy hyprland.conf"

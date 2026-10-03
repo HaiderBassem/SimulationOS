@@ -16,6 +16,8 @@ on:
 
 permissions:
   contents: read
+  # acceptance.yml downloads the ISO artifact through the API.
+  actions: read
 
 jobs:
   validate:
