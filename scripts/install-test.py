@@ -592,9 +592,13 @@ def phase_install(args, res, outdir, T):
             raise Fail("no usable root shell on the live serial console")
 
         log("Waiting for the live desktop")
-        g.sh("for i in $(seq 1 120); do systemctl is-active --quiet graphical.target && pgrep -x Hyprland >/dev/null "
-             "&& pgrep -x waybar >/dev/null && break; sleep 3; done", T.desktop + 60)
-        time.sleep(8)
+        hc = ("sig=$(ls -t /run/user/1000/hypr 2>/dev/null | head -1); hc() { runuser -u liveuser -- env "
+              "XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$sig hyprctl \"$@\"; }; ")
+        # Ready = drawn: the bar and wallpaper surfaces exist, not merely their processes.
+        g.sh(hc + "for i in $(seq 1 120); do systemctl is-active --quiet graphical.target && pgrep -x Hyprland >/dev/null "
+             "&& hc layers 2>/dev/null | grep -q 'namespace: waybar' && hc layers 2>/dev/null | grep -q 'namespace: wallpaper' "
+             "&& break; sleep 3; done", T.desktop + 60)
+        time.sleep(5)
         rc, out = g.sh("systemctl is-active graphical.target; systemctl get-default")
         res.set("Live graphical.target", "active" in lines(out)[:1] and "graphical.target" in (out or ""), " / ".join(lines(out)))
         rc, out = g.sh("systemctl is-active sddm.service display-manager.service")
@@ -602,8 +606,6 @@ def phase_install(args, res, outdir, T):
         rc, out = g.sh("loginctl list-sessions --no-legend | grep -E 'liveuser.*seat0' | head -1")
         res.set("Live autologin", rc == 0 and "liveuser" in (out or ""), first_line(out) or "no liveuser session on seat0")
 
-        hc = ("sig=$(ls -t /run/user/1000/hypr 2>/dev/null | head -1); hc() { runuser -u liveuser -- env "
-              "XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$sig hyprctl \"$@\"; }; ")
         rc, out = g.sh(hc + "pgrep -x Hyprland >/dev/null && echo RUNNING; "
                        "grep -qE 'no renderer for gl formats|Failed to initialize renderer state' "
                        "/run/user/1000/hypr/$sig/hyprland.log && echo NO_RENDERER; "

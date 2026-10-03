@@ -143,8 +143,14 @@ run() {
     fi
 }
 
+# hyprctl needs the instance signature of the liveuser session.
+HC='sig=$(ls /run/user/1000/hypr 2>/dev/null | head -1); hc() { runuser -u liveuser -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$sig hyprctl "$@"; }'
+
+# "Ready" means the desktop is DRAWN: the bar and the wallpaper have mapped
+# their surfaces. A process existing is not enough - under emulation Waybar
+# can take a long time between starting and showing its bar.
 info "Waiting for the graphical session to settle (inside the guest)"
-run wait-desktop 'for i in $(seq 1 120); do if systemctl is-active --quiet graphical.target && pgrep -f waybar >/dev/null 2>&1 && pgrep -x Hyprland >/dev/null 2>&1; then echo DESKTOP_READY; break; fi; sleep 5; done; systemctl is-active graphical.target' 900
+run wait-desktop "$HC"'; for i in $(seq 1 120); do if systemctl is-active --quiet graphical.target && pgrep -x Hyprland >/dev/null 2>&1 && hc layers 2>/dev/null | grep -q "namespace: waybar" && hc layers 2>/dev/null | grep -q "namespace: wallpaper"; then echo DESKTOP_READY; break; fi; sleep 5; done; systemctl is-active graphical.target' 900
 
 info "Collecting live-system state"
 run default-target   'systemctl get-default'
@@ -159,8 +165,6 @@ run portals          'runuser -u liveuser -- env XDG_RUNTIME_DIR=/run/user/1000 
 run networkmanager   'systemctl is-active NetworkManager; nmcli -t general status; nmcli -t device status'
 run dns              'getent hosts archlinux.org || echo DNS_FAIL'
 run pipewire         'runuser -u liveuser -- env XDG_RUNTIME_DIR=/run/user/1000 wpctl status 2>&1 | head -20 || echo WPCTL_FAIL'
-# hyprctl needs the instance signature of the liveuser session.
-HC='sig=$(ls /run/user/1000/hypr 2>/dev/null | head -1); hc() { runuser -u liveuser -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$sig hyprctl "$@"; }'
 run hypr-config      "$HC"'; hc configerrors | grep -v "^[[:space:]]*$" | head -20; hc configerrors | grep -qi "error" && echo HYPR_CONFIG_ERRORS || echo HYPR_CONFIG_CLEAN'
 run hypr-render      "$HC"'; if grep -qE "no renderer for gl formats|Failed to initialize renderer state" /run/user/1000/hypr/$sig/hyprland.log; then echo HYPR_NO_RENDERER; else echo HYPR_RENDERS; fi; ls /dev/dri'
 run hypr-layers      "$HC"'; hc layers | grep -oE "namespace: (waybar|wallpaper)" | sort -u'

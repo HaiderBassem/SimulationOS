@@ -41,7 +41,29 @@ case "$WORK" in
     *) red "refusing to use work directory $WORK (must be under /var/tmp or /tmp)"; exit 1 ;;
 esac
 
-rm -rf -- "$WORK"
+# remove_workdir - delete the scratch directory, but NEVER while anything is
+# mounted beneath it. A recursive delete that crosses a leftover bind mount of
+# /dev or /sys would reach into the host. So: stop processes still rooted in
+# the chroot, unmount, verify with findmnt, and refuse to delete otherwise.
+# --one-file-system is the second line of defence.
+remove_workdir() {
+    [ -d "$WORK" ] || return 0
+    local pid mp
+    for pid in $(find /proc -maxdepth 2 -name root -lname "$WORK/root*" 2>/dev/null | cut -d/ -f3); do
+        kill -9 "$pid" 2>/dev/null
+    done
+    findmnt -rno TARGET 2>/dev/null | grep -F "$WORK/" | sort -r | while read -r mp; do
+        umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null
+    done
+    if findmnt -rno TARGET 2>/dev/null | grep -qF "$WORK/"; then
+        red "refusing to delete $WORK: filesystems are still mounted beneath it:"
+        findmnt -rno TARGET | grep -F "$WORK/" >&2
+        return 1
+    fi
+    rm -rf --one-file-system -- "$WORK"
+}
+
+remove_workdir || exit 1
 mkdir -p "$WORK/root"
 
 info "Extracting the SquashFS from $(basename "$ISO")"
@@ -75,9 +97,25 @@ ERRORS=0
 gate() { if eval "$2"; then green "  ok      $1"; else red "  FAILED  $1"; ERRORS=$((ERRORS+1)); fi; }
 inroot() { chroot "$R" /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/bin HOME=/root "$@"; }
 
-for m in proc sys dev; do mount --rbind "/$m" "$R/$m" 2>/dev/null; done
-# shellcheck disable=SC2064
-trap "for m in dev sys proc; do umount -R '$R/'\$m 2>/dev/null; done" EXIT
+# API filesystems for the chroot. Deliberately NOT bind mounts of the host's
+# /dev and /sys: /proc and /sys are fresh instances (sysfs read-only), and
+# /dev is a private tmpfs holding only the nodes the tools need. Nothing the
+# chroot - or a cleanup gone wrong - does there can touch the host's devices.
+mount -t proc proc "$R/proc"
+mount -t sysfs -o ro sysfs "$R/sys"
+mount -t tmpfs -o mode=755,nosuid tmpfs "$R/dev"
+mknod -m 666 "$R/dev/null" c 1 3
+mknod -m 666 "$R/dev/zero" c 1 5
+mknod -m 666 "$R/dev/full" c 1 7
+mknod -m 666 "$R/dev/random" c 1 8
+mknod -m 666 "$R/dev/urandom" c 1 9
+mknod -m 666 "$R/dev/tty" c 5 0
+ln -s /proc/self/fd "$R/dev/fd"
+ln -s /proc/self/fd/0 "$R/dev/stdin"
+ln -s /proc/self/fd/1 "$R/dev/stdout"
+ln -s /proc/self/fd/2 "$R/dev/stderr"
+mkdir -p "$R/dev/shm" "$R/dev/pts"
+trap 'remove_workdir' EXIT
 
 # ------------------------------------------------- live medium: installer runs
 # Checked BEFORE deloop, against the image exactly as the live session sees it.
@@ -87,7 +125,8 @@ CALDIR=/usr/share/simulationos/calamares
 ELFS="/usr/bin/calamares $(cd "$R" && find usr/lib -maxdepth 1 -name 'libcalamares*.so' -printf '/%p ' 2>/dev/null) $(cd "$R" && find usr/lib/calamares/modules -name '*.so' -printf '/%p ' 2>/dev/null)"
 MISSING="$(for f in $ELFS; do inroot env LD_LIBRARY_PATH="$COMPAT" ldd "$f" 2>/dev/null; done | awk '/not found/{print $1}' | sort -u | tr '\n' ' ')"
 gate "Calamares and every module resolve their libraries${MISSING:+ (missing: $MISSING)}" "[ -z '$MISSING' ]"
-gate "Calamares config has a qml directory"   "[ -d '$R$CALDIR/qml/.' ]"
+# Checked inside the image: qml is an absolute symlink into /usr/share/calamares.
+gate "Calamares config has a qml directory"   "inroot test -d '$CALDIR/qml/.'"
 for mod in $(sed -n '/^sequence:/,/^branding:/p' "$R$CALDIR/settings.conf" \
              | grep -E '^[[:space:]]+-[[:space:]]' | sed 's/^[[:space:]]*-[[:space:]]*//; s/@.*//' | sort -u); do
     gate "Calamares module '$mod' exists in the package" "[ -d '$R/usr/lib/calamares/modules/$mod' ]"
@@ -104,8 +143,12 @@ HYPR_OUT="$(inroot env HOME=/tmp/hyprcheck XDG_RUNTIME_DIR=/tmp/hyprcheck/run \
 printf '%s\n' "$HYPR_OUT" | sed 's/^/    /'
 gate "Hyprland --verify-config reports 'config ok'" "printf '%s' \"\$HYPR_OUT\" | grep -q 'config ok'"
 rm -rf "$R/tmp/hyprcheck"
+FF_OUT="$(inroot env HOME=/etc/skel TERM=xterm-256color fastfetch --pipe false 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
+if ! printf '%s' "$FF_OUT" | grep -q '01010011 01101001 01101101 01001111 01010011'; then
+    printf '%s\n' "$FF_OUT" | head -12 | sed 's/^/    /'
+fi
 gate "fastfetch renders the SimOS logo" \
-    "inroot env HOME=/etc/skel fastfetch --pipe 2>/dev/null | grep -q '01010011 01101001 01101101 01001111 01010011'"
+    "printf '%s' \"\$FF_OUT\" | grep -q '01010011 01101001 01101101 01001111 01010011'"
 
 # ----------------------------------------------------------- run the transform
 info "Running simulationos-deloop inside the chroot (as Calamares does)"
@@ -155,9 +198,8 @@ gate "SimOS wallpapers and logo kept"         "[ -f '$R/usr/share/backgrounds/si
 gate "NetworkManager still enabled"           "[ -L '$R/etc/systemd/system/multi-user.target.wants/NetworkManager.service' ]"
 
 printf '\n'
-for m in dev sys proc; do umount -R "$R/$m" 2>/dev/null; done
 trap - EXIT
-rm -rf -- "$WORK"
+remove_workdir || ERRORS=$((ERRORS + 1))
 if [ "$ERRORS" -gt 0 ]; then
     red "DELOOP CONTRACT FAILED: $ERRORS gate(s)"
     exit 1
