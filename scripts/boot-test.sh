@@ -28,9 +28,11 @@ command -v qemu-system-x86_64 >/dev/null || { red "qemu-system-x86_64 not instal
 mkdir -p "$OUT"
 [ "${SIMOS_BOOT_ANALYZE_ONLY:-0}" = "1" ] || : > "$LOG"
 
+ACCEL_ARGS=()
+for a in $(printf '%s' "${SIMOS_QEMU_ACCEL:-kvm:tcg}" | tr ':' ' '); do ACCEL_ARGS+=(-accel "$a"); done
 # shellcheck disable=SC2054  # commas are part of QEMU option values
 QEMU=(qemu-system-x86_64
-      -machine "q35,accel=${SIMOS_QEMU_ACCEL:-kvm:tcg}"
+      -machine q35 "${ACCEL_ARGS[@]}"
       -cpu max -smp 2 -m "$RAM"
       -display none -vga std
       -serial "file:$LOG"

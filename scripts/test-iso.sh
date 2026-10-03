@@ -70,16 +70,35 @@ if [ "$BOOT_DISK_ONLY" -eq 0 ]; then
     [ -f "$ISO" ] || die "ISO not found: $ISO"
 fi
 
-# virtio-vga-gl + gl=on gives Hyprland a GPU to render on. Without it the
-# session falls back to llvmpipe, which works but is slow.
+# Graphics. Hyprland needs a virtio GPU: on plain VGA ("-vga std") it starts
+# but has no renderer, and the result is a black screen.
+#   Linux:  virtio-vga-gl + gl=on gives the guest real 3D acceleration.
+#   macOS:  Homebrew QEMU has neither the GTK display nor virgl, so use plain
+#           virtio-vga with the native window; the guest renders with llvmpipe
+#           (correct, just slower - and the whole VM is emulated there anyway).
+# Override with SIMOS_QEMU_GFX, e.g. SIMOS_QEMU_GFX="-device virtio-vga -display sdl".
+if [ -n "${SIMOS_QEMU_GFX:-}" ]; then
+    # shellcheck disable=SC2206  # deliberate word splitting of a user-supplied option list
+    GFX=($SIMOS_QEMU_GFX)
+elif [ "$(uname -s)" = "Darwin" ]; then
+    GFX=(-device virtio-vga -display cocoa)
+elif qemu-system-x86_64 -device help 2>/dev/null | grep -q '"virtio-vga-gl"'; then
+    # shellcheck disable=SC2054
+    GFX=(-device virtio-vga-gl -display gtk,gl=on)
+else
+    GFX=(-device virtio-vga)
+fi
+
+ACCEL=()
+for a in $(printf '%s' "${SIMOS_QEMU_ACCEL:-kvm:tcg}" | tr ':' ' '); do ACCEL+=(-accel "$a"); done
+
 # shellcheck disable=SC2054  # commas are part of QEMU option values, not separators
 QEMU=(qemu-system-x86_64
-      -machine q35,accel=kvm:tcg
+      -machine q35 "${ACCEL[@]}"
       -cpu max
       -smp "$CPUS"
       -m "$RAM"
-      -device virtio-vga-gl
-      -display gtk,gl=on
+      "${GFX[@]}"
       -audiodev "${SIMOS_QEMU_AUDIODEV:-none},id=snd0"
       -device intel-hda -device hda-duplex,audiodev=snd0
       -device virtio-net-pci,netdev=n0 -netdev user,id=n0
