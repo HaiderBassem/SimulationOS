@@ -325,8 +325,9 @@ if [ -f airootfs/usr/local/bin/simos-wallpaper ]; then
 fi
 ok
 
-# The fastfetch logo configured for new users must be shipped.
-FF=airootfs/etc/skel/.config/fastfetch/config.jsonc
+# The system-wide fastfetch config (every user, root included) and its logo.
+[ -f airootfs/etc/xdg/fastfetch/config.jsonc ] || err "airootfs/etc/xdg/fastfetch/config.jsonc is missing (fastfetch would show the Arch logo)"
+FF=airootfs/etc/xdg/fastfetch/config.jsonc
 if [ -f "$FF" ]; then
     LOGO="$(sed -n 's/.*"source":[[:space:]]*"\([^"]*\)".*/\1/p' "$FF" | head -1)"
     [ -n "$LOGO" ] && [ ! -f "airootfs$LOGO" ] && err "fastfetch logo $LOGO is not shipped"

@@ -143,7 +143,7 @@ HYPR_OUT="$(inroot env HOME=/tmp/hyprcheck XDG_RUNTIME_DIR=/tmp/hyprcheck/run \
 printf '%s\n' "$HYPR_OUT" | sed 's/^/    /'
 gate "Hyprland --verify-config reports 'config ok'" "printf '%s' \"\$HYPR_OUT\" | grep -q 'config ok'"
 rm -rf "$R/tmp/hyprcheck"
-FF_OUT="$(inroot env HOME=/etc/skel TERM=xterm-256color fastfetch --pipe false 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
+FF_OUT="$(inroot env TERM=xterm-256color fastfetch --pipe false 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
 if ! printf '%s' "$FF_OUT" | grep -q '01010011 01101001 01101101 01001111 01010011'; then
     printf '%s\n' "$FF_OUT" | head -12 | sed 's/^/    /'
 fi

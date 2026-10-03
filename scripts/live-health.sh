@@ -144,7 +144,9 @@ run() {
 }
 
 # hyprctl needs the instance signature of the liveuser session.
-HC='sig=$(ls /run/user/1000/hypr 2>/dev/null | head -1); hc() { runuser -u liveuser -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$sig hyprctl "$@"; }'
+# The signature is looked up on EVERY call: this is first used while waiting
+# for Hyprland, before its instance directory exists.
+HC='hc() { sig=$(ls -t /run/user/1000/hypr 2>/dev/null | head -1); runuser -u liveuser -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$sig hyprctl "$@"; }'
 
 # "Ready" means the desktop is DRAWN: the bar and the wallpaper have mapped
 # their surfaces. A process existing is not enough - under emulation Waybar
@@ -166,7 +168,7 @@ run networkmanager   'systemctl is-active NetworkManager; nmcli -t general statu
 run dns              'getent hosts archlinux.org || echo DNS_FAIL'
 run pipewire         'runuser -u liveuser -- env XDG_RUNTIME_DIR=/run/user/1000 wpctl status 2>&1 | head -20 || echo WPCTL_FAIL'
 run hypr-config      "$HC"'; hc configerrors | grep -v "^[[:space:]]*$" | head -20; hc configerrors | grep -qi "error" && echo HYPR_CONFIG_ERRORS || echo HYPR_CONFIG_CLEAN'
-run hypr-render      "$HC"'; if grep -qE "no renderer for gl formats|Failed to initialize renderer state" /run/user/1000/hypr/$sig/hyprland.log; then echo HYPR_NO_RENDERER; else echo HYPR_RENDERS; fi; ls /dev/dri'
+run hypr-render      "$HC"'; if grep -qE "no renderer for gl formats|Failed to initialize renderer state" /run/user/1000/hypr/*/hyprland.log; then echo HYPR_NO_RENDERER; else echo HYPR_RENDERS; fi; ls /dev/dri'
 run hypr-layers      "$HC"'; hc layers | grep -oE "namespace: (waybar|wallpaper)" | sort -u'
 # The installer must be able to START, not merely exist: every Calamares
 # binary and module has to resolve its shared libraries.

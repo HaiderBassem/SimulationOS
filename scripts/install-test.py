@@ -592,7 +592,9 @@ def phase_install(args, res, outdir, T):
             raise Fail("no usable root shell on the live serial console")
 
         log("Waiting for the live desktop")
-        hc = ("sig=$(ls -t /run/user/1000/hypr 2>/dev/null | head -1); hc() { runuser -u liveuser -- env "
+        # The instance signature is looked up on every call: hc is first used
+        # while waiting for Hyprland, before its instance directory exists.
+        hc = ("hc() { sig=$(ls -t /run/user/1000/hypr 2>/dev/null | head -1); runuser -u liveuser -- env "
               "XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$sig hyprctl \"$@\"; }; ")
         # Ready = drawn: the bar and wallpaper surfaces exist, not merely their processes.
         g.sh(hc + "for i in $(seq 1 120); do systemctl is-active --quiet graphical.target && pgrep -x Hyprland >/dev/null "
@@ -608,7 +610,7 @@ def phase_install(args, res, outdir, T):
 
         rc, out = g.sh(hc + "pgrep -x Hyprland >/dev/null && echo RUNNING; "
                        "grep -qE 'no renderer for gl formats|Failed to initialize renderer state' "
-                       "/run/user/1000/hypr/$sig/hyprland.log && echo NO_RENDERER; "
+                       "/run/user/1000/hypr/*/hyprland.log && echo NO_RENDERER; "
                        "hc layers | grep -oE 'namespace: (waybar|wallpaper)' | sort -u; "
                        "pgrep -x -u liveuser 'waybar|swaybg|mako|nm-applet|hyprpolkitagent' -l | awk '{print $2}' | sort -u | tr '\\n' ' '")
         o = out or ""
