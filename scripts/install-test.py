@@ -33,6 +33,7 @@ Needs: qemu-system-x86_64, OVMF/edk2 firmware, tesseract. Python stdlib only.
 import argparse
 import datetime
 import glob
+import gzip
 import hashlib
 import json
 import os
@@ -276,6 +277,28 @@ class Screen:
         os.remove(big)
         return base + ".png", out
 
+    def widest_run(self, rgb, rows, name="pixels"):
+        """Longest horizontal run of exactly `rgb`, in pixels, over the given rows."""
+        base, ppm = self._dump(name)
+        with open(ppm, "rb") as fh:
+            data = fh.read()
+        ppm_to_png(ppm, base + ".png")
+        os.remove(ppm)
+        m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+\d+\s", data)
+        if not m:
+            return 0
+        w, h = int(m.group(1)), int(m.group(2))
+        best, want = 0, bytes(rgb)
+        for y in rows:
+            if y >= h:
+                break
+            row = data[m.end() + y * w * 3: m.end() + (y + 1) * w * 3]
+            run = 0
+            for x in range(w):
+                run = run + 1 if row[x * 3:x * 3 + 3] == want else 0
+                best = max(best, run)
+        return best
+
     def text(self, name="ocr"):
         return " ".join(w[0] for w in self.words(name)[1])
 
@@ -403,12 +426,16 @@ class Serial:
         text = re.sub(r"\x1b\[[0-9;?=]*[a-zA-Z]", "", text)             # CSI
         return text.replace("\r", "\n")
 
-    def wait_for(self, pattern, timeout, alive=None):
+    def mark(self):
+        """Position in the console output; pass it to wait_for to ignore what came before."""
+        return len(self.clean())
+
+    def wait_for(self, pattern, timeout, alive=None, since=0):
         deadline = time.time() + timeout
         rx = re.compile(pattern, re.M)
         while True:
             self._drain()
-            m = rx.search(self.clean())
+            m = rx.search(self.clean(), since)
             if m:
                 return m
             if alive and not alive():
@@ -450,9 +477,11 @@ class Serial:
 
         The emulated UART repeats a character now and then under KVM (seen on
         the hosted runners: "wallpapeer", "###END"), so nothing is trusted as it
-        arrives. The guest keeps the output in a file and sends it as hex bytes
-        with an MD5 and the exit status; a repeated character is undone, the
-        sum is checked, and a damaged transfer is asked for again. The markers
+        arrives. The guest keeps the output in a file and sends it gzipped, as
+        hex bytes, with an MD5 and the exit status; a repeated character is
+        undone, the sum is checked, and a damaged transfer is asked for again.
+        (gzip because the UART is paced at its baud rate: a whole Calamares log
+        as plain hex takes minutes.) The markers
         have no doubled characters once squeezed, and are assembled by printf
         in the guest, so an echoed command line is never mistaken for output.
         """
@@ -462,10 +491,10 @@ class Serial:
         text = ""
         for attempt in "abc":
             tag = base + attempt
-            emit = (f"printf '\\n##BEG%s {tag}\\n' IN; od -An -v -tx1 $_f; printf '\\n##SU%s {tag}\\n' M; "
-                    f"{{ md5sum <$_f; echo $_r; }} | od -An -v -tx1; printf '\\n##EN%s {tag}\\n' D")
+            emit = (f"printf '\\n##BEG%s {tag}\\n' IN; od -An -v -tx1 $_f.gz; printf '\\n##SU%s {tag}\\n' M; "
+                    f"{{ md5sum <$_f.gz; echo $_r; }} | od -An -v -tx1; printf '\\n##EN%s {tag}\\n' D")
             if attempt == "a":
-                self.send(f"_f=/tmp/.simos-test.$UID; {{ {cmd} ; }} >$_f 2>&1; _r=$?; " + emit)
+                self.send(f"_f=/tmp/.simos-test.$UID; {{ {cmd} ; }} >$_f 2>&1; _r=$?; gzip -c <$_f >$_f.gz; " + emit)
             else:
                 self.send(emit)
                 deadline = max(deadline, time.time() + 60)
@@ -484,7 +513,8 @@ class Serial:
             trailer = (self._unhex(text[mid[1]:end[0]]) or b"").decode("ascii", "replace").split()
             if (data is not None and len(trailer) >= 3 and trailer[-1].isdigit()
                     and trailer[0] == hashlib.md5(data).hexdigest()):
-                return int(trailer[-1]), data.decode("utf-8", "replace").replace("\r", "").strip()
+                body = gzip.decompress(data) if data else b""
+                return int(trailer[-1]), body.decode("utf-8", "replace").replace("\r", "").strip()
         return None, "serial transfer still damaged after 3 attempts: " + text[-600:]
 
 
@@ -675,9 +705,11 @@ def phase_install(args, res, outdir, T):
 
         # ---- installer launcher: the application-menu entry (.desktop file)
         log("Launching the installer from the application menu")
-        # The bar's bold monospace label does not OCR whole ("Install Sin ationos"),
-        # so the button is recognised by its first word, inside the bar strip.
-        bar_button = any(_norm(w[0]).startswith("install") and w[2] < 40 for w in sc.words("live-bar")[1])
+        # The bar's bold monospace label does not OCR reliably ("Install Sin
+        # ationos", or nothing), so the button is recognised by what it is: the
+        # one wide accent-coloured block in the bar. The launcher test below
+        # proves the entry it starts.
+        bar_button = sc.widest_run((0x17, 0x93, 0xd1), rows=range(4, 30), name="live-bar") >= 150
         sc.key("meta_l+d")
         time.sleep(4 if kvm_usable() else 8)
         sc.type("Install Sim")
@@ -896,13 +928,17 @@ def desktop_shell(g, T, name):
         return False, False, False
     sc.shot(f"{name}-terminal-open")
     # Real sudo, real password prompt, typed by "the user".
+    # The console log still holds the prompts of the previous boot: only a
+    # prompt that appears from here on is the getty being started now.
+    since = ser.mark()
     sc.type("sudo systemctl start serial-getty@ttyS0.service\n")
     asked = bool(sc.wait_text("password for", T.ui, f"{name}-sudo-prompt", interval=3))
     sc.type(TEST_PASS + "\n")
-    if not ser.wait_for(r"l+o+g+i+n+:", T.ui * 2):
+    if not ser.wait_for(r"l+o+g+i+n+:", T.ui * 2, since=since):
         return terminal, asked, False
+    since = ser.mark()
     ser.send(TEST_USER)
-    ser.wait_for(r"P+a+s+w+o+r+d+:", T.ui)
+    ser.wait_for(r"P+a+s+w+o+r+d+:", T.ui, since=since)
     time.sleep(1)
     ser.send(TEST_PASS)
     time.sleep(5)
@@ -1018,20 +1054,25 @@ def installed_checks(g, res, T, grub_seen, sudo_asked):
     failed_units = sl[2:] + lines(userp)
     res.set("Installed systemd", len(sl) >= 2 and sl[0] in ("running", "degraded", "starting") and sl[1] == "graphical.target",
             f"state {sl[0] if sl else '?'}, default target {sl[1] if len(sl) > 1 else '?'}")
+    why = ""
+    if failed_units:
+        rc, out = sh("for u in " + " ".join(failed_units[:3]) + "; do systemctl show -p Result,ExecMainStatus --value $u | tr '\\n' ' '; "
+                     "{ journalctl -b -u $u --no-pager -o cat; journalctl -b --user -u $u --no-pager -o cat; } 2>/dev/null | tail -4; done")
+        why = " :: " + " | ".join(lines(out))[:600]
     res.set("System health", not failed_units and sl[:1] == ["running"],
-            "no failed system or user units" if not failed_units else "failed units: " + " ".join(failed_units))
+            "no failed system or user units" if not failed_units else "failed units: " + " ".join(failed_units) + why)
     rc, out = sh("systemctl is-active sddm.service; systemctl is-enabled sddm.service; "
                  "grep -rhsE '^User=.+' /etc/sddm.conf /etc/sddm.conf.d | head -1")
     ls = lines(out)
     res.set("Installed SDDM", ls[:2] == ["active", "enabled"] and len(ls) == 2,
             "sddm active and enabled; greeter shown; no autologin user configured")
     rc, out = sh(f"id {TEST_USER}; loginctl list-sessions --no-legend | grep -E '{TEST_USER}.*seat0' | head -1; "
-                 f"stat -c '%U %a' /home/{TEST_USER}; hostname")
+                 f"stat -c '%U %a' /home/{TEST_USER}; uname -n")
     o = out or ""
     res.set("Installed user login", "wheel" in o and "seat0" in o and f"{TEST_USER} 700" in o and TEST_HOST in o,
             " | ".join(lines(o))[:300])
 
-    hc = "export XDG_RUNTIME_DIR=/run/user/$(id -u); export HYPRLAND_INSTANCE_SIGNATURE=$(ls -t $XDG_RUNTIME_DIR/hypr | head -1); "
+    hc = "export XDG_RUNTIME_DIR=/run/user/$(id -u); export HYPRLAND_INSTANCE_SIGNATURE=$(command ls -t $XDG_RUNTIME_DIR/hypr | head -1); "
     rc, out = sh(hc + "pgrep -x Hyprland >/dev/null && echo RUNNING; hyprctl configerrors | grep -c .; "
                  "hyprctl layers | grep -oE 'namespace: (waybar|wallpaper)' | sort -u | tr '\\n' ' '; echo; "
                  "pgrep -x -u $(id -u) 'waybar|swaybg|mako|nm-applet|hyprpolkitagent' -l | awk '{print $2}' | sort -u | tr '\\n' ' '; echo; "
