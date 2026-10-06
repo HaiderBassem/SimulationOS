@@ -33,6 +33,7 @@ Needs: qemu-system-x86_64, OVMF/edk2 firmware, tesseract. Python stdlib only.
 import argparse
 import datetime
 import glob
+import hashlib
 import json
 import os
 import re
@@ -416,24 +417,75 @@ class Serial:
                 return None
             time.sleep(1.5)
 
+    @staticmethod
+    def _squeeze(text):
+        return re.sub(r"(.)\1+", r"\1", text)
+
+    def _marker(self, text, word, tag, start):
+        """(start, end) of a marker line at or after `start`, or None."""
+        want = self._squeeze(f"##{word} {tag}")
+        for m in re.finditer(r"^#.*$", text[start:], re.M):
+            if self._squeeze(m.group(0).strip()) == want:
+                return start + m.start(), start + m.end()
+        return None
+
+    @staticmethod
+    def _unhex(block):
+        """Decode `od -tx1` output, undoing repeated characters; None if it is damaged."""
+        out = bytearray()
+        for tok in block.split():
+            if len(tok) != 2:
+                runs = [m.group(1) for m in re.finditer(r"(.)\1*", tok)]
+                if len(tok) < 2 or len(runs) > 2:
+                    return None
+                tok = runs[0] * 2 if len(runs) == 1 else runs[0] + runs[1]
+            try:
+                out.append(int(tok, 16))
+            except ValueError:
+                return None
+        return bytes(out)
+
     def run(self, cmd, timeout=180):
         """Run a shell command in the logged-in serial shell; return (rc, output).
 
-        The markers are assembled by printf in the guest, so the echoed command
-        line can never be mistaken for the command's output.
+        The emulated UART repeats a character now and then under KVM (seen on
+        the hosted runners: "wallpapeer", "###END"), so nothing is trusted as it
+        arrives. The guest keeps the output in a file and sends it as hex bytes
+        with an MD5 and the exit status; a repeated character is undone, the
+        sum is checked, and a damaged transfer is asked for again. The markers
+        have no doubled characters once squeezed, and are assembled by printf
+        in the guest, so an echoed command line is never mistaken for output.
         """
         self.seq += 1
-        tag = f"T{self.seq:04d}"
-        self.send(f"printf '\\n##BEG%s {tag}\\n' IN; {{ {cmd} ; }} 2>&1; printf '\\n##EN%s {tag} rc=%s\\n' D \"$?\"")
-        m = self.wait_for(rf"^##END {tag} rc=(\d+)", timeout)
-        text = self.clean()
-        start = text.rfind(f"##BEGIN {tag}")
-        if m is None or start < 0:
-            return None, text[-1500:]
-        end = text.find(f"##END {tag}", start)
-        segment = text[start:end]
-        body = segment.split("\n", 1)[1] if "\n" in segment else ""
-        return int(m.group(1)), body.strip()
+        base = "T" + ".".join(f"{self.seq:04d}")
+        deadline = time.time() + timeout
+        text = ""
+        for attempt in "abc":
+            tag = base + attempt
+            emit = (f"printf '\\n##BEG%s {tag}\\n' IN; od -An -v -tx1 $_f; printf '\\n##SU%s {tag}\\n' M; "
+                    f"{{ md5sum <$_f; echo $_r; }} | od -An -v -tx1; printf '\\n##EN%s {tag}\\n' D")
+            if attempt == "a":
+                self.send(f"_f=/tmp/.simos-test.$UID; {{ {cmd} ; }} >$_f 2>&1; _r=$?; " + emit)
+            else:
+                self.send(emit)
+                deadline = max(deadline, time.time() + 60)
+            while True:
+                self._drain()
+                text = self.clean()
+                beg = self._marker(text, "BEGIN", tag, 0)
+                mid = beg and self._marker(text, "SUM", tag, beg[1])
+                end = mid and self._marker(text, "END", tag, mid[1])
+                if end:
+                    break
+                if time.time() > deadline:
+                    return None, text[-1500:]
+                time.sleep(1.5)
+            data = self._unhex(text[beg[1]:mid[0]])
+            trailer = (self._unhex(text[mid[1]:end[0]]) or b"").decode("ascii", "replace").split()
+            if (data is not None and len(trailer) >= 3 and trailer[-1].isdigit()
+                    and trailer[0] == hashlib.md5(data).hexdigest()):
+                return int(trailer[-1]), data.decode("utf-8", "replace").replace("\r", "").strip()
+        return None, "serial transfer still damaged after 3 attempts: " + text[-600:]
 
 
 # ------------------------------------------------------------------------ VM
@@ -577,7 +629,7 @@ def phase_install(args, res, outdir, T):
     ser, sc = g.serial, g.screen
     try:
         # ---- live boot
-        if not ser.wait_for(r"login:", T.boot, alive=g.vm.alive):
+        if not ser.wait_for(r"l+o+g+i+n+:", T.boot, alive=g.vm.alive):
             res.set("Live ISO UEFI boot", False, "no login prompt on the serial console")
             raise Fail("the live system did not boot")
         ser.send("")
@@ -623,7 +675,9 @@ def phase_install(args, res, outdir, T):
 
         # ---- installer launcher: the application-menu entry (.desktop file)
         log("Launching the installer from the application menu")
-        bar_button = sc.find("Install SimulationOS", "live-bar") is not None
+        # The bar's bold monospace label does not OCR whole ("Install Sin ationos"),
+        # so the button is recognised by its first word, inside the bar strip.
+        bar_button = any(_norm(w[0]).startswith("install") and w[2] < 40 for w in sc.words("live-bar")[1])
         sc.key("meta_l+d")
         time.sleep(4 if kvm_usable() else 8)
         sc.type("Install Sim")
@@ -685,7 +739,7 @@ def phase_install(args, res, outdir, T):
             rc, out = g.sh(THIS_RUN + "grep -c 'Installation failed' $L; "
                            "grep 'Starting job' $L | tail -1 | sed 's/.*Starting job //'; "
                            "grep -c 'installed system verified' $L", T.cmd)
-            ls = lines(out)
+            ls = lines(out) if rc is not None else []
             if len(ls) >= 3:
                 if ls[1] != last:
                     last = ls[1]
@@ -845,10 +899,10 @@ def desktop_shell(g, T, name):
     sc.type("sudo systemctl start serial-getty@ttyS0.service\n")
     asked = bool(sc.wait_text("password for", T.ui, f"{name}-sudo-prompt", interval=3))
     sc.type(TEST_PASS + "\n")
-    if not ser.wait_for(r"login:", T.ui * 2):
+    if not ser.wait_for(r"l+o+g+i+n+:", T.ui * 2):
         return terminal, asked, False
     ser.send(TEST_USER)
-    ser.wait_for(r"Password:", T.ui)
+    ser.wait_for(r"P+a+s+w+o+r+d+:", T.ui)
     time.sleep(1)
     ser.send(TEST_PASS)
     time.sleep(5)
