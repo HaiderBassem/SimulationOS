@@ -783,7 +783,10 @@ def phase_install(args, res, outdir, T):
                 done = True
                 break
         sc.shot("installer-end")
-        rc, slog = g.sh(THIS_RUN + "cat $L", T.cmd * 2)
+        # Only the outline of the log: the serial line manages a few hundred
+        # characters a second on the hosted runners.
+        rc, slog = g.sh(THIS_RUN + "grep -E 'Starting job|ERROR|Installation failed|installed system verified' $L "
+                        "| cut -c1-200 | tail -n 80", T.cmd * 2)
         with open(os.path.join(outdir, "calamares-session.log"), "w") as fh:
             fh.write(slog or "")
         if not done:
@@ -818,7 +821,7 @@ def inspect_target(g, res, T):
     rc, out = sh("lsblk -rno NAME,FSTYPE,PARTTYPENAME /dev/vda; blkid -o value -s PTTYPE /dev/vda")
     o = out or ""
     res.set("Partition", "vda1 vfat EFI" in o.replace("\\x20", " ") and "vda2 ext4" in o and "gpt" in o, " | ".join(lines(o)))
-    rc, out = sh("findmnt -rno TARGET,SOURCE,FSTYPE /mnt/t /mnt/t/boot/efi")
+    rc, out = sh("findmnt -rno TARGET,SOURCE,FSTYPE /mnt/t; findmnt -rno TARGET,SOURCE,FSTYPE /mnt/t/boot/efi")
     res.set("Mount", len(lines(out)) == 2, " | ".join(lines(out)))
     rc, out = sh("grep -c '^NAME=\"SimulationOS\"' /mnt/t/etc/os-release; du -sxm /mnt/t | cut -f1; test -x /mnt/t/usr/bin/Hyprland && echo HYPR")
     ls = lines(out)
@@ -995,8 +998,14 @@ def phase_boot(args, res, outdir, T):
         # ========================================================= second boot
         log("Rebooting the installed system")
         rc, boot1 = g.sh("cat /proc/sys/kernel/random/boot_id")
+        since = g.serial.mark()
         g.serial.send("sudo -n systemctl reboot")
-        time.sleep(20 if kvm_usable() else 60)
+        # Stopping the session takes a while, and until it has, the old desktop
+        # is still on screen. The firmware announces the new boot on the serial
+        # console; only then is a greeter the new system's greeter.
+        if not g.serial.wait_for(r"B+d+s+D+x+e+", T.shutdown + T.ui, since=since):
+            log("    no firmware message after the reboot request; continuing")
+        time.sleep(5)
         typed = greeter_login(g, T, "boot2")
         terminal, asked, serial_ok = (False, False, False)
         if typed:
