@@ -1003,8 +1003,10 @@ def phase_boot(args, res, outdir, T):
         # Stopping the session takes a while, and until it has, the old desktop
         # is still on screen. The firmware announces the new boot on the serial
         # console; only then is a greeter the new system's greeter.
-        if not g.serial.wait_for(r"B+d+s+D+x+e+", T.shutdown + T.ui, since=since):
+        t_reboot = time.time()
+        if not g.serial.wait_for(r"B+d+s+D+x+e+", T.shutdown * 3, since=since):
             log("    no firmware message after the reboot request; continuing")
+        log(f"    shutdown for the reboot took {time.time() - t_reboot:.0f}s")
         time.sleep(5)
         typed = greeter_login(g, T, "boot2")
         terminal, asked, serial_ok = (False, False, False)
@@ -1017,13 +1019,21 @@ def phase_boot(args, res, outdir, T):
             ls = lines(out)
             ok2 = bool(ls) and ls[0] != first_line(boot1) and ls[1:4] == ["active"] * 3 and "HYPR" in ls and "ARCHISO" not in ls
             ev = "new boot id; graphical.target, SDDM, NetworkManager active; Hyprland session running" if ok2 else " | ".join(ls)
+            # What, if anything, held up the shutdown of the previous boot.
+            rc, out = g.sh("journalctl -b -1 --no-pager -o short-monotonic 2>&1 | grep -iE 'timed out|stop job|SIGKILL|Killing process|"
+                           "Failed with result|Reached target.*(Shutdown|Reboot)|System is rebooting' | cut -c1-170 | tail -n 14")
+            for ln in lines(out):
+                log("    previous shutdown: " + ln)
         res.set("second reboot", ok2, ev)
 
         # ============================================================ power off
         if serial_ok:
             g.sh(f"printf '%s\\n' '{TEST_PASS}' | sudo -S -p '' -v")
             g.serial.send("sudo -n systemctl poweroff")
-            res.set("shutdown", g.vm.wait_exit(T.shutdown), "systemctl poweroff completed; the VM exited by itself")
+            t_off = time.time()
+            off = g.vm.wait_exit(T.shutdown * 3)
+            res.set("shutdown", off, f"systemctl poweroff completed; the VM exited by itself after {time.time() - t_off:.0f}s"
+                    if off else f"the VM was still running {T.shutdown * 3}s after 'systemctl poweroff'")
     finally:
         try:
             sc.shot("installed-final")
