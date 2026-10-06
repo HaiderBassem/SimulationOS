@@ -186,6 +186,11 @@ rmdir /etc/systemd/journald.conf.d 2>/dev/null
 drop /etc/systemd/logind.conf.d/do-not-suspend.conf
 rmdir /etc/systemd/logind.conf.d 2>/dev/null
 
+# The live medium waits for network time because pacman's keyring needs a sane
+# clock. An installed desktop must not: without a reachable time server the
+# unit times out and every boot ends "degraded". timesyncd itself stays enabled.
+drop /etc/systemd/system/sysinit.target.wants/systemd-time-wait-sync.service
+
 # sshd must not be enabled by default on an installed desktop.
 drop /etc/systemd/system/multi-user.target.wants/sshd.service \
      /etc/ssh/sshd_config.d/10-archiso.conf
