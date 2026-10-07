@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+#
+# simulationos-verify-target - last Calamares job before umount.
+#
+# Runs INSIDE the target chroot and asserts the properties the installed
+# system needs in order to boot without the ISO and to be free of live-medium
+# state. Any failure exits non-zero, so Calamares shows an error naming the
+# broken property instead of "Installation Complete".
+#
+set -u
+
+FAILED=0
+ok()   { printf '[verify] ok      %s\n' "$*"; }
+bad()  { printf '[verify] FAILED  %s\n' "$*" >&2; FAILED=$((FAILED + 1)); }
+check() { # description, command...
+    local what="$1"; shift
+    if "$@" >/dev/null 2>&1; then ok "$what"; else bad "$what"; fi
+}
+
+# ------------------------------------------------------------------------ boot
+check "kernel present in /boot"           test -s /boot/vmlinuz-linux-cachyos
+check "initramfs present in /boot"        test -s /boot/initramfs-linux-cachyos.img
+check "GRUB configuration generated"      test -s /boot/grub/grub.cfg
+check "grub.cfg boots linux-cachyos"      grep -q 'vmlinuz-linux-cachyos' /boot/grub/grub.cfg
+check "grub.cfg loads the initramfs"      grep -q 'initramfs-linux-cachyos.img' /boot/grub/grub.cfg
+check "grub.cfg names root by UUID"       grep -Eq 'root=UUID=[0-9a-fA-F-]+' /boot/grub/grub.cfg
+if [ -d /sys/firmware/efi ]; then
+    check "GRUB EFI binary on the ESP"    sh -c 'find /boot/efi/EFI -iname "grubx64.efi" | grep -q .'
+    check "EFI fallback loader on the ESP" sh -c 'find /boot/efi/EFI -ipath "*/boot/bootx64.efi" | grep -q .'
+fi
+
+# The initramfs must be a normal one. lsinitcpio lists the image contents; an
+# archiso hook inside it means the system can only boot from the ISO.
+if command -v lsinitcpio >/dev/null 2>&1 && [ -s /boot/initramfs-linux-cachyos.img ]; then
+    if lsinitcpio /boot/initramfs-linux-cachyos.img 2>/dev/null | grep -q 'archiso'; then
+        bad "initramfs is free of archiso hooks"
+    else
+        ok "initramfs is free of archiso hooks"
+    fi
+fi
+check "no archiso mkinitcpio configuration" \
+    sh -c '! grep -rqs archiso /etc/mkinitcpio.conf /etc/mkinitcpio.conf.d /etc/mkinitcpio.d'
+
+# ----------------------------------------------------------------------- fstab
+check "fstab has a root entry"            grep -Eq '^UUID=[^[:space:]]+[[:space:]]+/[[:space:]]' /etc/fstab
+check "fstab is free of live mounts"      sh -c '! grep -Eq "archiso|airootfs|/run/|cowspace|loop" /etc/fstab'
+
+# -------------------------------------------------------------------- security
+check "liveuser account absent"           sh -c '! getent passwd liveuser'
+check "/home/liveuser absent"             sh -c '! test -e /home/liveuser'
+check "no NOPASSWD sudo rule"             sh -c '! grep -rhsE "^[^#]*NOPASSWD" /etc/sudoers /etc/sudoers.d'
+check "sudoers configuration valid"       visudo -c
+check "live polkit rule absent"           sh -c '! test -e /etc/polkit-1/rules.d/49-simulationos-live-nopasswd.rules'
+check "live SDDM autologin absent"        sh -c '! grep -rqsE "^User=liveuser" /etc/sddm.conf /etc/sddm.conf.d'
+check "tty autologin absent"              sh -c '! test -e /etc/systemd/system/getty@tty1.service.d/autologin.conf'
+check "root account locked" \
+    sh -c 'case "$(awk -F: "\$1==\"root\"{print \$2}" /etc/shadow)" in "!"*|"*"*) exit 0;; *) exit 1;; esac'
+
+# ------------------------------------------------------------------------ user
+# The account the person just created: a regular user with a home directory
+# and wheel membership (how they administer the system).
+user="$(awk -F: '$3>=1000 && $3<60000 {print $1; exit}' /etc/passwd)"
+if [ -n "$user" ]; then
+    ok "installed user exists ($user)"
+    check "installed user has a home directory" test -d "/home/$user"
+    check "installed user is in wheel"          sh -c "id -nG '$user' | tr ' ' '\n' | grep -qx wheel"
+    check "installed user owns their home"      sh -c "[ \"\$(stat -c %U /home/$user)\" = '$user' ]"
+    check "desktop configuration copied from skel" test -f "/home/$user/.config/hypr/hyprland.lua"
+else
+    bad "installed user exists"
+fi
+
+# -------------------------------------------------------------------- services
+check "SDDM enabled"                      systemctl is-enabled sddm.service
+check "NetworkManager enabled"            systemctl is-enabled NetworkManager.service
+check "default target is graphical"       sh -c '[ "$(systemctl get-default)" = graphical.target ]'
+check "pacman keyring initialised"        sh -c 'test -s /etc/pacman.d/gnupg/pubring.gpg || test -s /etc/pacman.d/gnupg/pubring.kbx'
+check "SimulationOS branding"             grep -q '^NAME="SimulationOS"' /etc/os-release
+
+if [ "$FAILED" -gt 0 ]; then
+    printf '[verify] %s check(s) failed: this installation would not be a working SimulationOS\n' "$FAILED" >&2
+    exit 1
+fi
+printf '[verify] installed system verified\n'
+exit 0

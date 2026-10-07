@@ -1,48 +1,250 @@
 #!/usr/bin/env bash
 #
-# SimulationOS graphical installer launcher.
+# simulationos-install - launch the SimulationOS installer (Calamares).
 #
-# Starts Calamares against SimulationOS's own configuration tree. That tree
-# lives at a SimulationOS-owned path rather than /etc/calamares because the
-# cachyos-calamares package already owns /etc/calamares/modules/*.conf and has
-# no backup= array, so shipping our own files there would be a hard pacstrap
-# file conflict. Calamares' -c/--config flag overrides appDataDir, which
-# relocates settings.conf, modules/ AND branding/ into that one directory.
+# This is what the "Install SimulationOS" launcher (Waybar button, application
+# menu entry) runs. It works in two stages:
 #
-set -euo pipefail
+#   1. as the desktop user: check prerequisites, then re-execute itself as root
+#      through pkexec/polkit, handing over ONLY the variables a GUI needs to
+#      reach the running Wayland session.
+#   2. as root (--as-root): verify the install source, start Calamares with the
+#      SimulationOS configuration, and keep logs and diagnostics.
+#
+# Privilege model: polkit, not sudo. On the live medium a polkit rule lets the
+# passwordless live user authorise this without a prompt; that rule, this
+# script and its menu entry are all removed from the installed system by
+# simulationos-deloop.
+#
+# Every failure is reported in the desktop (notification) AND in the log; the
+# user is never left with a launcher that silently does nothing.
+#
+set -uo pipefail
 
+SELF="/usr/local/bin/simulationos-install"
 CONFIG_DIR="/usr/share/simulationos/calamares"
-LOG="${HOME:-/tmp}/simulationos-install.log"
+COMPAT_DIR="/usr/lib/simulationos/calamares-compat"
+SFS_CANDIDATES=(
+    /run/archiso/bootmnt/arch/x86_64/airootfs.sfs
+    /run/archiso/copytoram/airootfs.sfs
+)
 
-die() { printf 'simulationos-install: %s\n' "$1" >&2; exit 1; }
+say() { printf 'simulationos-install: %s\n' "$*" >&2; }
 
-[ -x /usr/bin/calamares ] || die "Calamares is not installed (/usr/bin/calamares missing)."
-[ -r "$CONFIG_DIR/settings.conf" ] || die "SimulationOS installer config missing: $CONFIG_DIR/settings.conf"
-
-# Re-exec with privileges if we are not root yet.
-if [ "$(id -u)" -ne 0 ]; then
-    if command -v pkexec >/dev/null 2>&1; then
-        exec pkexec env \
-            XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
-            WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" \
-            DISPLAY="${DISPLAY:-}" \
-            XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-Hyprland}" \
-            QT_QPA_PLATFORM='wayland;xcb' \
-            SIMOS_INSTALL_LOG="$LOG" \
-            /usr/local/bin/simulationos-install
+# notify TITLE BODY - desktop notification as the session user, best effort.
+notify() {
+    command -v notify-send >/dev/null 2>&1 || return 0
+    if [ "$(id -u)" -eq 0 ] && [ -n "${SIMOS_SESSION_UID:-}" ]; then
+        runuser -u "$(id -nu "$SIMOS_SESSION_UID")" -- env \
+            XDG_RUNTIME_DIR="/run/user/$SIMOS_SESSION_UID" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$SIMOS_SESSION_UID/bus" \
+            notify-send -u critical -a "SimulationOS Installer" -i simulationos "$1" "$2" \
+            >/dev/null 2>&1 || true
+    else
+        notify-send -u critical -a "SimulationOS Installer" -i simulationos "$1" "$2" \
+            >/dev/null 2>&1 || true
     fi
-    die "Need root privileges and pkexec is unavailable. Try: sudo -E simulationos-install"
+}
+
+die() {
+    say "$1"
+    [ -n "${LOG:-}" ] && printf '===== FATAL: %s\n' "$1" >>"$LOG" 2>/dev/null
+    notify "The installer could not start" "$1${LOG:+
+
+Log: $LOG}"
+    exit 1
+}
+
+# ============================================================ stage 1: user ===
+if [ "${1:-}" != "--as-root" ]; then
+    LOG="${HOME:-/tmp}/simulationos-install.log"
+    : >>"$LOG" 2>/dev/null || LOG="/tmp/simulationos-install.log"
+
+    [ -x /usr/bin/calamares ] || die "Calamares is not installed (/usr/bin/calamares is missing)."
+    [ -r "$CONFIG_DIR/settings.conf" ] || die "The installer configuration is missing ($CONFIG_DIR/settings.conf)."
+
+    if pgrep -x calamares >/dev/null 2>&1; then
+        notify "The installer is already running" "Look for the SimulationOS Installer window."
+        exit 0
+    fi
+
+    if [ "$(id -u)" -eq 0 ]; then
+        export SIMOS_SESSION_UID="${SUDO_UID:-0}" SIMOS_INSTALL_LOG="$LOG"
+        exec "$SELF" --as-root
+    fi
+
+    command -v pkexec >/dev/null 2>&1 || die "pkexec (polkit) is not available, so the installer cannot obtain administrator rights."
+
+    runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ] \
+        || die "No graphical session found (neither WAYLAND_DISPLAY nor DISPLAY is set)."
+
+    # pkexec starts the target with a minimal environment. Pass through exactly
+    # what Qt needs to open a window in this session, nothing else.
+    pkexec env \
+        XDG_RUNTIME_DIR="$runtime" \
+        WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" \
+        DISPLAY="${DISPLAY:-}" \
+        XAUTHORITY="${XAUTHORITY:-}" \
+        XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-Hyprland}" \
+        XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}" \
+        SIMOS_SESSION_UID="$(id -u)" \
+        SIMOS_INSTALL_LOG="$LOG" \
+        "$SELF" --as-root
+    rc=$?
+    case "$rc" in
+        0)   exit 0 ;;
+        126) die "Administrator authorisation was dismissed, so the installer was not started." ;;
+        127) die "Administrator authorisation failed (polkit refused the request)." ;;
+        *)   say "installer exited with status $rc (details in $LOG)"; exit "$rc" ;;
+    esac
 fi
 
-LOG="${SIMOS_INSTALL_LOG:-$LOG}"
+# ============================================================ stage 2: root ===
+[ "$(id -u)" -eq 0 ] || { say "--as-root requires root"; exit 1; }
 
-# Make sure the clock is sane before any signature check happens.
-timedatectl set-ntp true 2>/dev/null || true
+LOG="${SIMOS_INSTALL_LOG:-/var/log/simulationos-install.log}"
+DIAG="${LOG%.log}-diagnostics.txt"
+SESSION_UID="${SIMOS_SESSION_UID:-0}"
+export HOME=/root
+
+own_logs() {
+    [ "$SESSION_UID" != "0" ] && chown "$SESSION_UID" "$LOG" "$DIAG" 2>/dev/null
+    return 0
+}
+
+# collect_diagnostics - everything needed to debug a failed installation
+# without asking the user to run commands.
+collect_diagnostics() {
+    {
+        printf '===== SimulationOS installer diagnostics: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        printf '\n===== lsblk -f\n';  lsblk -f 2>&1
+        printf '\n===== blkid\n';     blkid 2>&1
+        printf '\n===== findmnt\n';   findmnt 2>&1
+        for root in /tmp/calamares-root-*; do
+            [ -d "$root" ] || continue
+            printf '\n===== target %s\n' "$root"
+            printf -- '----- etc/fstab\n';        cat "$root/etc/fstab" 2>&1
+            printf -- '----- boot\n';             ls -la "$root/boot" "$root/boot/grub" 2>&1 | head -60
+            printf -- '----- ESP\n';              find "$root/boot/efi" -maxdepth 4 2>&1 | head -60
+            printf -- '----- mkinitcpio config\n'; grep -H '^HOOKS' "$root/etc/mkinitcpio.conf" "$root"/etc/mkinitcpio.conf.d/* 2>&1
+            printf -- '----- tree summary\n';     du -xsh "$root" 2>&1; ls "$root" 2>&1
+        done
+        printf '\n===== efibootmgr -v\n';   efibootmgr -v 2>&1
+        printf '\n===== journal (this boot, last 300 lines)\n'
+        journalctl -b --no-pager -n 300 2>&1
+    } >"$DIAG" 2>&1
+}
 
 {
-    printf '===== SimulationOS installation started: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf '\n===== SimulationOS installation started: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     printf '===== ISO version: %s\n' "$(sed -n 's/^DISTRIB_RELEASE=//p' /etc/simulationos-release 2>/dev/null || echo unknown)"
-    command -v inxi >/dev/null 2>&1 && inxi -Fxz 2>/dev/null || true
+    printf '===== firmware: %s\n' "$([ -d /sys/firmware/efi ] && echo UEFI || echo BIOS)"
 } >>"$LOG" 2>&1
+own_logs
 
-exec calamares -c "$CONFIG_DIR" -D6 >>"$LOG" 2>&1
+# --- install source ----------------------------------------------------------
+# The SquashFS path is a property of how the medium was booted (normal boot vs
+# copytoram), so it is verified at runtime instead of assumed.
+SFS=""
+for candidate in "${SFS_CANDIDATES[@]}"; do
+    [ -r "$candidate" ] && { SFS="$candidate"; break; }
+done
+[ -n "$SFS" ] || die "The installation image (airootfs.sfs) was not found. This installer only works when SimulationOS is booted from its live medium."
+printf '===== install source: %s (%s bytes)\n' "$SFS" "$(stat -c %s "$SFS")" >>"$LOG"
+
+UNPACK_CONF="$CONFIG_DIR/modules/unpackfs.conf"
+if ! grep -qF "\"$SFS\"" "$UNPACK_CONF"; then
+    sed -i -E "s|^([[:space:]]*-[[:space:]]*source:[[:space:]]*)\"[^\"]*airootfs\.sfs\"|\1\"$SFS\"|" "$UNPACK_CONF" \
+        || die "Could not point the installer at $SFS."
+    grep -qF "\"$SFS\"" "$UNPACK_CONF" || die "Could not point the installer at $SFS."
+    printf '===== unpackfs source rewritten to %s\n' "$SFS" >>"$LOG"
+fi
+
+# --- libraries ---------------------------------------------------------------
+# cachyos-calamares can lag behind an Arch soname bump (see
+# scripts/calamares-compat.sh). The build stages the libraries it needs in
+# COMPAT_DIR; they are visible to the installer only, never system-wide.
+if [ -d "$COMPAT_DIR" ]; then
+    export LD_LIBRARY_PATH="$COMPAT_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+missing="$(ldd /usr/bin/calamares 2>/dev/null | awk '/not found/{print $1}' | sort -u | tr '\n' ' ')"
+[ -z "$missing" ] || die "Calamares cannot start: missing libraries: $missing"
+
+# --- display -----------------------------------------------------------------
+if [ -n "${WAYLAND_DISPLAY:-}" ] && [ -S "${XDG_RUNTIME_DIR:-/nonexistent}/$WAYLAND_DISPLAY" ]; then
+    export QT_QPA_PLATFORM="wayland;xcb"
+elif [ -n "${DISPLAY:-}" ]; then
+    export QT_QPA_PLATFORM="xcb"
+else
+    die "Cannot reach the graphical session as administrator (no Wayland socket at ${XDG_RUNTIME_DIR:-?}/${WAYLAND_DISPLAY:-?})."
+fi
+[ -n "${XAUTHORITY:-}" ] || unset XAUTHORITY
+
+# A crashed Calamares leaves its single-instance lock behind and every later
+# start exits immediately with status 87. Clear it when nothing is running.
+if ! pgrep -x calamares >/dev/null 2>&1; then
+    rm -f /tmp/kdsingleapp-*calamares* 2>/dev/null
+fi
+
+timedatectl set-ntp true >/dev/null 2>&1 || true
+
+# --- run ---------------------------------------------------------------------
+# systemd-inhibit: no suspend/idle in the middle of writing a disk.
+# dbus-run-session: root has no session bus of its own; KDE libraries used by
+# the partitioning module expect one.
+systemd-inhibit --what=sleep:idle --who="SimulationOS Installer" \
+    --why="Installing SimulationOS" \
+    dbus-run-session -- calamares -c "$CONFIG_DIR" -D6 >>"$LOG" 2>&1
+rc=$?
+
+# Calamares APPENDS to its session log, so a retry after a failed attempt still
+# contains the earlier failure. Judge only the run that just ended.
+SESSION_LOG=/root/.cache/calamares/session.log
+THIS_RUN="$(mktemp)"
+if [ -r "$SESSION_LOG" ]; then
+    awk '/=== START CALAMARES/ { buf = "" } { buf = buf $0 "\n" } END { printf "%s", buf }' \
+        "$SESSION_LOG" > "$THIS_RUN"
+fi
+
+result="closed"
+failed_job=""
+if grep -q 'Installation failed' "$THIS_RUN"; then
+    result="failed"
+    # The job that was running when the failure was reported.
+    failed_job="$(awk '/Starting job "/ { job = $0 } /Installation failed/ { print job; exit }' "$THIS_RUN" \
+        | sed -n 's/.*Starting job "\([^"]*\)".*/\1/p')"
+elif grep -q 'installed system verified' "$THIS_RUN"; then
+    result="completed"
+fi
+
+{
+    printf '===== Calamares exited with status %s: %s\n' "$rc" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    case "$result" in
+        failed)
+            printf '===== RESULT: INSTALLATION FAILED in job: %s\n' "${failed_job:-unknown}"
+            grep -A12 'Installation failed' "$THIS_RUN" | head -40 ;;
+        completed) printf '===== RESULT: INSTALLATION COMPLETED\n' ;;
+        *)         printf '===== RESULT: installer closed before an installation completed\n' ;;
+    esac
+} >>"$LOG" 2>&1
+rm -f -- "$THIS_RUN"
+
+if [ "$result" = "failed" ] || [ "$rc" -ne 0 ]; then
+    collect_diagnostics
+    own_logs
+    if [ "$result" = "failed" ]; then
+        notify "Installation failed" "Failed step: ${failed_job:-unknown}
+
+Log: $LOG
+Diagnostics: $DIAG"
+    else
+        notify "The installer stopped unexpectedly" "Exit status $rc.
+
+Log: $LOG
+Diagnostics: $DIAG"
+    fi
+    exit 1
+fi
+own_logs
+exit 0

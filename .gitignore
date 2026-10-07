@@ -5,3 +5,6 @@
 /.cache/
 /artifacts/
 .DS_Store
+# Installer compatibility libraries staged at build time by
+# scripts/calamares-compat.sh (never committed: they track upstream packages).
+/airootfs/usr/lib/simulationos/calamares-compat/

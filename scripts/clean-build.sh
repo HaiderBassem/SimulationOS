@@ -60,4 +60,12 @@ else
     info "No output directory to remove"
 fi
 
+# Build-time staging inside the profile (see scripts/calamares-compat.sh).
+COMPAT="$REPO/airootfs/usr/lib/simulationos/calamares-compat"
+if [ -d "$COMPAT" ]; then
+    info "Removing staged installer compatibility libraries"
+    rm -rf -- "$COMPAT"
+    rmdir -p --ignore-fail-on-non-empty "$REPO/airootfs/usr/lib/simulationos" 2>/dev/null || true
+fi
+
 info "Clean"

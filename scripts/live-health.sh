@@ -49,11 +49,18 @@ done
 [ -n "$OVMF_CODE" ] && [ -n "$OVMF_VARS_SRC" ] || { red "OVMF firmware not found"; exit 1; }
 VARS="$OUT/OVMF_VARS.live-health.fd"; cp -f "$OVMF_VARS_SRC" "$VARS"
 
+# "kvm:tcg" -> "-accel kvm -accel tcg": use KVM when the host offers it.
+ACCEL_ARGS=""
+for a in $(printf '%s' "$ACCEL" | tr ':' ' '); do ACCEL_ARGS="$ACCEL_ARGS -accel $a"; done
+
+# Graphics: virtio-gpu, not "std". Hyprland needs a DRM device it can create a
+# renderer on; on plain VGA (bochs) every process starts but nothing is drawn,
+# which a process check cannot see. The "renders" assertion below guards that.
 info "Booting $(basename "$ISO") for live health checks (timeout ${TIMEOUT}s)"
-# shellcheck disable=SC2054  # commas are part of QEMU option values
+# shellcheck disable=SC2054,SC2086  # commas are part of QEMU option values; ACCEL_ARGS is a word list
 qemu-system-x86_64 \
-    -machine "q35,accel=$ACCEL" -cpu max -smp 2 -m "$RAM" \
-    -display none -vga std \
+    -machine q35 $ACCEL_ARGS -cpu max -smp 2 -m "$RAM" \
+    -display none -vga "${SIMOS_QEMU_VGA:-virtio}" \
     -drive "if=pflash,format=raw,unit=0,readonly=on,file=$OVMF_CODE" \
     -drive "if=pflash,format=raw,unit=1,file=$VARS" \
     -serial "pipe:$PIPE" \
@@ -136,8 +143,16 @@ run() {
     fi
 }
 
+# hyprctl needs the instance signature of the liveuser session.
+# The signature is looked up on EVERY call: this is first used while waiting
+# for Hyprland, before its instance directory exists.
+HC='hc() { sig=$(ls -t /run/user/1000/hypr 2>/dev/null | head -1); runuser -u liveuser -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$sig hyprctl "$@"; }'
+
+# "Ready" means the desktop is DRAWN: the bar and the wallpaper have mapped
+# their surfaces. A process existing is not enough - under emulation Waybar
+# can take a long time between starting and showing its bar.
 info "Waiting for the graphical session to settle (inside the guest)"
-run wait-desktop 'for i in $(seq 1 120); do if systemctl is-active --quiet graphical.target && pgrep -f waybar >/dev/null 2>&1 && pgrep -x Hyprland >/dev/null 2>&1; then echo DESKTOP_READY; break; fi; sleep 5; done; systemctl is-active graphical.target' 900
+run wait-desktop "$HC"'; for i in $(seq 1 120); do if systemctl is-active --quiet graphical.target && pgrep -x Hyprland >/dev/null 2>&1 && hc layers 2>/dev/null | grep -q "namespace: waybar" && hc layers 2>/dev/null | grep -q "namespace: wallpaper"; then echo DESKTOP_READY; break; fi; sleep 5; done; systemctl is-active graphical.target' 900
 
 info "Collecting live-system state"
 run default-target   'systemctl get-default'
@@ -147,11 +162,19 @@ run displaymanager   'systemctl is-active display-manager.service; systemctl is-
 run sessions         'loginctl list-sessions --no-legend; loginctl list-users --no-legend'
 run liveuser         'id liveuser'
 run hyprland         'pgrep -a Hyprland || echo NO_HYPRLAND'
-run session-procs    'pgrep -a -f "waybar|hyprpaper|mako|hyprpolkitagent|nm-applet" || echo NO_SESSION_PROCS'
+run session-procs    'pgrep -a -f "waybar|swaybg|mako|hyprpolkitagent|nm-applet" || echo NO_SESSION_PROCS'
 run portals          'runuser -u liveuser -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus busctl --user introspect org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop >/dev/null 2>&1 && echo PORTAL_ACTIVATES || echo PORTAL_NO_ACTIVATE; pgrep -a -f xdg-desktop-portal || true'
 run networkmanager   'systemctl is-active NetworkManager; nmcli -t general status; nmcli -t device status'
 run dns              'getent hosts archlinux.org || echo DNS_FAIL'
 run pipewire         'runuser -u liveuser -- env XDG_RUNTIME_DIR=/run/user/1000 wpctl status 2>&1 | head -20 || echo WPCTL_FAIL'
+run hypr-config      "$HC"'; hc configerrors | grep -v "^[[:space:]]*$" | head -20; hc configerrors | grep -qi "error" && echo HYPR_CONFIG_ERRORS || echo HYPR_CONFIG_CLEAN'
+run hypr-render      "$HC"'; if grep -qE "no renderer for gl formats|Failed to initialize renderer state" /run/user/1000/hypr/*/hyprland.log; then echo HYPR_NO_RENDERER; else echo HYPR_RENDERS; fi; ls /dev/dri'
+run hypr-layers      "$HC"'; hc layers | grep -oE "namespace: (waybar|wallpaper)" | sort -u'
+# The installer must be able to START, not merely exist: every Calamares
+# binary and module has to resolve its shared libraries.
+run calamares-libs   'export LD_LIBRARY_PATH=/usr/lib/simulationos/calamares-compat; miss=$(for f in /usr/bin/calamares /usr/lib/libcalamares*.so /usr/lib/calamares/modules/*/*.so; do ldd "$f" 2>/dev/null; done | awk "/not found/{print \$1}" | sort -u | tr "\n" " "); if [ -z "$miss" ]; then echo CALAMARES_LIBS_OK; else echo "CALAMARES_LIBS_MISSING $miss"; fi; unset LD_LIBRARY_PATH'
+run calamares-qml    'test -d /usr/share/simulationos/calamares/qml/. && echo CALAMARES_QML_OK || echo CALAMARES_QML_MISSING'
+run install-source   'test -r /run/archiso/bootmnt/arch/x86_64/airootfs.sfs && echo SFS_PRESENT || echo SFS_MISSING'
 run calamares-bin    'test -x /usr/bin/calamares && echo CALAMARES_PRESENT || echo CALAMARES_MISSING'
 run calamares-cfg    'test -f /usr/share/simulationos/calamares/settings.conf && echo CALAMARES_CFG_PRESENT || echo CALAMARES_CFG_MISSING'
 run desktop-entry    'test -f /usr/share/applications/simulationos-install.desktop && echo DESKTOP_PRESENT || echo DESKTOP_MISSING'
@@ -179,17 +202,27 @@ assert "graphical.target active"     graphical      '^active$'
 assert "display-manager active"      displaymanager '^active$'
 assert "liveuser exists"             liveuser       'uid=1000'
 assert "Hyprland running"            hyprland       'Hyprland'
-assert "session components running"  session-procs  'waybar|hyprpaper|mako|hyprpolkitagent'
+assert "Hyprland config has no errors" hypr-config  '^HYPR_CONFIG_CLEAN'
+assert "Hyprland has a renderer"     hypr-render    '^HYPR_RENDERS'
+assert "bar is drawn"                hypr-layers    'namespace: waybar'
+assert "wallpaper is drawn"          hypr-layers    'namespace: wallpaper'
+assert "session components running"  session-procs  'waybar'
+assert "wallpaper daemon running"    session-procs  'swaybg'
+assert "notification daemon running" session-procs  'mako'
+assert "polkit agent running"        session-procs  'hyprpolkitagent'
 assert "xdg-desktop-portal present"  portals        'PORTAL_ACTIVATES|xdg-desktop-portal'
 assert "NetworkManager active"       networkmanager '^active$'
 assert "DNS resolves"                dns            'archlinux\.org'
 assert "PipeWire running"            pipewire       'PipeWire|Audio'
 assert "Calamares installed"         calamares-bin  'CALAMARES_PRESENT'
+assert "Calamares libraries resolve" calamares-libs '^CALAMARES_LIBS_OK'
+assert "Calamares qml directory"     calamares-qml  'CALAMARES_QML_OK'
+assert "install source readable"     install-source 'SFS_PRESENT'
 assert "installer config present"    calamares-cfg  'CALAMARES_CFG_PRESENT'
 assert "installer launcher present"  desktop-entry  'DESKTOP_PRESENT'
 
 printf '\n== diagnostics\n'
-for s in failed-units sessions sddm-journal hypr-journal networkmanager pipewire; do report "$s"; done
+for s in failed-units sessions sddm-journal hypr-journal hypr-config hypr-render hypr-layers calamares-libs networkmanager pipewire; do report "$s"; done
 
 printf '\n'
 if [ "$ERRORS" -gt 0 ]; then

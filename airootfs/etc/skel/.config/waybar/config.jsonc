@@ -1,15 +1,15 @@
 // SimulationOS - Waybar
 //
-// Built-in modules only, plus one custom module that calls simos-powermenu
-// (shipped in airootfs/usr/local/bin). Nothing here depends on an external
-// helper script, so a missing script can never blank the bar.
+// Built-in modules plus two custom ones: the power menu (simos-powermenu) and,
+// on the live medium only, the installer button (simulationos-install). Both
+// helpers ship in airootfs/usr/local/bin.
 {
   "layer": "top",
   "position": "top",
   "height": 34,
   "spacing": 6,
 
-  "modules-left":   ["hyprland/workspaces", "hyprland/submap"],
+  "modules-left":   ["custom/install", "hyprland/workspaces", "hyprland/submap"],
   "modules-center": ["hyprland/window"],
   "modules-right":  ["tray", "pulseaudio", "network", "cpu", "memory", "temperature", "battery", "clock", "custom/power"],
 
@@ -76,6 +76,18 @@
     "format": "󰥔 {:%H:%M}",
     "format-alt": "󰃭 {:%a %d %b %Y}",
     "tooltip-format": "<tt><small>{calendar}</small></tt>"
+  },
+
+  // Shown only while the installer exists, i.e. on the live medium:
+  // simulationos-deloop deletes the launcher from the installed system, and a
+  // custom module whose exec-if fails is hidden.
+  "custom/install": {
+    "exec-if": "test -x /usr/local/bin/simulationos-install",
+    "exec": "echo 'Install SimulationOS'",
+    "interval": "once",
+    "format": "󰋊  {}",
+    "tooltip": false,
+    "on-click": "simulationos-install"
   },
 
   "custom/power": {

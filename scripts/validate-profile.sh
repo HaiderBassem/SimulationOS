@@ -89,6 +89,16 @@ else
         rm -f .validate_fperm_fail
     fi
     ok
+
+    # mkarchiso copies airootfs WITHOUT preserving modes, so a script is only
+    # executable in the ISO if file_permissions says so. A helper missing here
+    # ships as 0644 and fails with "permission denied" at runtime.
+    while IFS= read -r f; do
+        head -1 "$f" | grep -q '^#!' || continue
+        grep -qF "[\"${f#airootfs}\"]=\"0:0:755\"" profiledef.sh \
+            || err "profiledef.sh file_permissions has no 0:0:755 entry for ${f#airootfs}"
+    done < <(find airootfs/usr/local/bin airootfs/usr/share/simulationos/calamares/scripts -type f 2>/dev/null)
+    ok
 fi
 
 # ---------------------------------------------------------------------------
@@ -234,33 +244,44 @@ ok
 # ---------------------------------------------------------------------------
 section "Hyprland session"
 # ---------------------------------------------------------------------------
-HYPR=airootfs/etc/skel/.config/hypr/hyprland.conf
+# Hyprland >= 0.55 is configured in Lua. A leftover hyprland.conf is parsed by
+# the legacy loader and greets the user with a wall of config errors.
+HYPRDIR=airootfs/etc/skel/.config/hypr
+HYPR="$HYPRDIR/hyprland.lua"
+[ -f "$HYPRDIR/hyprland.conf" ] \
+    && err "$HYPRDIR/hyprland.conf exists: the shipped Hyprland is configured through hyprland.lua (old syntax = config errors at login)"
 if [ ! -f "$HYPR" ]; then
     err "$HYPR is missing"
 else
-    # Every sourced file must exist.
-    grep -E '^[[:space:]]*source[[:space:]]*=' "$HYPR" | sed 's/.*=[[:space:]]*//' | while read -r src; do
-        rel="$(printf '%s' "$src" | sed 's|^~/.config/|airootfs/etc/skel/.config/|')"
-        if [ ! -f "$rel" ]; then
-            red "  ERROR   hyprland.conf sources missing file: $src"
-            echo x >>"$REPO/.validate_src_fail"
-        fi
-    done
-    if [ -f .validate_src_fail ]; then
-        ERRORS=$((ERRORS + $(wc -l < .validate_src_fail))); rm -f .validate_src_fail
+    # Legacy hyprlang keywords have no meaning in the Lua config.
+    if grep -nE '^[[:space:]]*(exec-once|windowrulev2|windowrule|bind[a-z]*|source|env|monitor)[[:space:]]*=' "$HYPR" >/dev/null; then
+        err "$HYPR contains legacy hyprlang syntax (key = value lines)"
     fi
+
+    # Every require()d module must be shipped next to hyprland.lua.
+    for mod in $(grep -oE 'require[,(][[:space:]]*"[^"]+"' "$HYPR" | sed 's/.*"\(.*\)"/\1/' | sort -u); do
+        [ -f "$HYPRDIR/$(printf '%s' "$mod" | tr . /).lua" ] \
+            || err "hyprland.lua requires '$mod' but $HYPRDIR/$mod.lua is not shipped"
+    done
     ok
 
-    # Every exec-once / exec target must be a shipped package binary or a
-    # script we ship in airootfs/usr/local/bin.
-    CMDS="$(grep -E '^[[:space:]]*(exec-once|exec)[[:space:]]*=' "$HYPR" \
-            | sed 's/.*=[[:space:]]*//' | awk '{print $1}' | sort -u)"
-    # Map binary -> providing package for the ones that differ in name.
+    # Every command started from the config must be a shipped package binary
+    # or a script in airootfs/usr/local/bin. Lua locals (terminal, launcher,
+    # fileManager) are resolved to their string values first.
+    CMDS="$( { grep -oE 'exec_cmd\("[^"]+"' "$HYPR" | sed 's/exec_cmd("//; s/"$//'
+               # simos-session is the ordered autostart list: "start <cmd> ..."
+               sed -n 's/^start[[:space:]]\+//p' airootfs/usr/local/bin/simos-session 2>/dev/null
+               grep -E '^local[[:space:]]+[A-Za-z]+[[:space:]]*=[[:space:]]*"' "$HYPR" \
+                   | grep -vE '^local[[:space:]]+mainMod' | sed 's/^[^"]*"//; s/".*//'
+             } | awk '{print $1}' | sort -u)"
     for cmd in $CMDS; do
         case "$cmd" in
-            dbus-update-activation-environment|systemctl) continue ;;  # from dbus/systemd in base
+            dbus-update-activation-environment|systemctl|hyprctl) continue ;;  # dbus/systemd/hyprland
         esac
-        if [ -f "airootfs/usr/local/bin/$cmd" ]; then continue; fi
+        if [ -f "airootfs/usr/local/bin/$cmd" ]; then
+            [ -x "airootfs/usr/local/bin/$cmd" ] || err "airootfs/usr/local/bin/$cmd is not executable"
+            continue
+        fi
         prov="$cmd"
         case "$cmd" in
             nm-applet)       prov=network-manager-applet ;;
@@ -268,42 +289,61 @@ else
             wl-paste)        prov=wl-clipboard ;;
             wpctl)           prov=wireplumber ;;
         esac
-        has_pkg "$prov" || err "hyprland.conf runs '$cmd' but package '$prov' is not in packages.x86_64"
+        has_pkg "$prov" || err "hyprland.lua runs '$cmd' but package '$prov' is not in packages.x86_64"
     done
     ok
 
-    # Keybind targets that are our own scripts must exist.
-    for s in simos-screenshot simos-powermenu simos-clipboard; do
-        if grep -q "$s" "$HYPR"; then
-            [ -x "airootfs/usr/local/bin/$s" ] \
-                || err "hyprland.conf binds '$s' but airootfs/usr/local/bin/$s is missing or not executable"
-        fi
-    done
-    ok
+    if command -v luac >/dev/null 2>&1; then
+        luac -p "$HYPR" 2>/dev/null || err "Lua syntax error in $HYPR"
+        ok
+    fi
 fi
 
-# Wallpaper referenced by hyprpaper must exist.
-HP=airootfs/etc/skel/.config/hypr/hyprpaper.conf
-if [ -f "$HP" ]; then
-    grep -E '^[[:space:]]*(preload|wallpaper)[[:space:]]*=' "$HP" \
-      | sed 's/.*[=,][[:space:]]*//' | grep '^/' | sort -u | while read -r img; do
-        if [ ! -f "airootfs${img}" ]; then
-            red "  ERROR   hyprpaper references missing image: $img"
-            echo x >>"$REPO/.validate_wp_fail"
-        fi
+# hyprpaper >= 0.8 needs a hardware GPU and crashes on software-rendered
+# machines; the wallpaper is drawn by swaybg (see simos-wallpaper).
+has_pkg hyprpaper && err "packages.x86_64 lists hyprpaper; SimulationOS draws the wallpaper with swaybg"
+has_pkg swaybg    || err "packages.x86_64 is missing 'swaybg' (used by simos-wallpaper)"
+[ -f "$HYPRDIR/hyprpaper.conf" ] && err "$HYPRDIR/hyprpaper.conf is dead configuration (no hyprpaper is shipped)"
+if [ -f "$HYPRDIR/hyprlock.conf" ]; then
+    for img in $(sed -n 's/^[[:space:]]*path[[:space:]]*=[[:space:]]*\(\/[^[:space:]]*\).*/\1/p' "$HYPRDIR/hyprlock.conf" | sort -u); do
+        [ -f "airootfs${img}" ] || err "hyprlock.conf references missing image: $img"
     done
-    if [ -f .validate_wp_fail ]; then
-        ERRORS=$((ERRORS + $(wc -l < .validate_wp_fail))); rm -f .validate_wp_fail
-    fi
 fi
 ok
 
-# Exactly one wallpaper daemon.
-WPD=0
-for d in hyprpaper swww swaybg wpaperd; do
-    grep -rqE "exec-once[[:space:]]*=[[:space:]]*$d" airootfs/etc/skel/.config/hypr 2>/dev/null && WPD=$((WPD+1))
-done
-[ "$WPD" -gt 1 ] && err "more than one wallpaper daemon is started from the Hyprland config"
+# The session must be started through the ordered startup script.
+grep -q 'exec_cmd("simos-session")' "$HYPR" 2>/dev/null \
+    || err "hyprland.lua does not start simos-session (unordered autostart races the session environment)"
+ok
+
+# Every wallpaper the switcher can select must be shipped.
+if [ -f airootfs/usr/local/bin/simos-wallpaper ]; then
+    for n in $(sed -n 's/^NAMES=(\(.*\))/\1/p' airootfs/usr/local/bin/simos-wallpaper); do
+        [ -f "airootfs/usr/share/backgrounds/simulationos/simos-$n.png" ] \
+            || err "simos-wallpaper offers '$n' but simos-$n.png is not shipped"
+    done
+fi
+ok
+
+# The system-wide fastfetch config (every user, root included) and its logo.
+[ -f airootfs/etc/xdg/fastfetch/config.jsonc ] || err "airootfs/etc/xdg/fastfetch/config.jsonc is missing (fastfetch would show the Arch logo)"
+FF=airootfs/etc/xdg/fastfetch/config.jsonc
+if [ -f "$FF" ]; then
+    LOGO="$(sed -n 's/.*"source":[[:space:]]*"\([^"]*\)".*/\1/p' "$FF" | head -1)"
+    [ -n "$LOGO" ] && [ ! -f "airootfs$LOGO" ] && err "fastfetch logo $LOGO is not shipped"
+fi
+ok
+
+# Waybar must only call helpers that exist.
+WB=airootfs/etc/skel/.config/waybar/config.jsonc
+if [ -f "$WB" ]; then
+    for h in $(grep -oE '"on-click":[[:space:]]*"[^"]+"' "$WB" | sed 's/.*"\([^"]*\)"$/\1/' | awk '{print $1}' | sort -u); do
+        [ -x "airootfs/usr/local/bin/$h" ] && continue
+        case "$h" in nm-connection-editor|pavucontrol) has_pkg "$h" && continue ;; esac
+        [ "$h" = "activate" ] && continue
+        err "waybar runs '$h' on click, which is neither a shipped helper nor a known package binary"
+    done
+fi
 ok
 
 # ---------------------------------------------------------------------------
@@ -430,6 +470,52 @@ else
     fi
     ok
 
+    # Calamares refuses to start with -c <dir> unless <dir>/qml exists.
+    { [ -e "$CALDIR/qml" ] || [ -L "$CALDIR/qml" ]; } \
+        || err "$CALDIR/qml is missing: 'calamares -c' aborts without a qml directory"
+    grep -qE '^hide-back-and-next-during-exec:' "$CALDIR/settings.conf" \
+        || err "settings.conf lacks 'hide-back-and-next-during-exec' (required by Calamares >= 3.4)"
+    ok
+
+    # Order of the exec phase. Each pair is "A must run before B".
+    EXEC_SEQ="$(sed -n '/^- exec:/,/^- show:/p' "$CALDIR/settings.conf" \
+                | grep -E '^[[:space:]]+-[[:space:]]' | sed 's/^[[:space:]]*-[[:space:]]*//')"
+    pos() { printf '%s\n' "$EXEC_SEQ" | grep -nx -- "$1" | head -1 | cut -d: -f1; }
+    for pair in \
+        'unpackfs:shellprocess@deloop' \
+        'removeuser:shellprocess@deloop' \
+        'shellprocess@deloop:initcpiocfg' \
+        'initcpiocfg:initcpio' \
+        'shellprocess@deloop:users' \
+        'removeuser:users' \
+        'fstab:initcpio' \
+        'initcpio:bootloader' \
+        'grubcfg:bootloader' \
+        'packages:bootloader' \
+        'bootloader:shellprocess@verify' \
+        'shellprocess@verify:umount'; do
+        first="${pair%%:*}"; second="${pair##*:}"
+        pa="$(pos "$first")"; pb="$(pos "$second")"
+        if [ -z "$pa" ]; then err "settings.conf exec sequence is missing '$first'"; continue; fi
+        if [ -z "$pb" ]; then err "settings.conf exec sequence is missing '$second'"; continue; fi
+        [ "$pa" -lt "$pb" ] || err "settings.conf: '$first' must run before '$second'"
+    done
+    for need in displaymanager services-systemd networkcfg machineid localecfg; do
+        [ -n "$(pos "$need")" ] || err "settings.conf exec sequence is missing '$need'"
+    done
+    ok
+
+    # initcpio must build every preset; a literal '*' is passed to mkinitcpio -p.
+    grep -qE '^kernel:[[:space:]]*all[[:space:]]*$' "$CALDIR/modules/initcpio.conf" 2>/dev/null \
+        || err "initcpio.conf must set 'kernel: all'"
+    # Golden path: GRUB, with the ESP at /boot/efi.
+    grep -qE '^efiBootLoader:[[:space:]]*"?grub"?' "$CALDIR/modules/bootloader.conf" 2>/dev/null \
+        || err "bootloader.conf does not select GRUB"
+    for need in grub efibootmgr dosfstools e2fsprogs; do
+        has_pkg "$need" || err "packages.x86_64 is missing '$need', required to install the golden path"
+    done
+    ok
+
     # The unpackfs source path must match install_dir/arch from profiledef.sh.
     IDIR="$(sed -n 's/^install_dir="\(.*\)"/\1/p' profiledef.sh | head -1)"
     IARCH="$(sed -n 's/^arch="\(.*\)"/\1/p' profiledef.sh | head -1)"
@@ -461,7 +547,8 @@ else
     # The live medium must not leak into the installed system.
     DELOOP="$CALDIR/scripts/simulationos-deloop"
     if [ -f "$DELOOP" ]; then
-        for must in 'mkinitcpio.conf.d/archiso.conf' 'live-autologin' '10-simulationos-live' 'passwd --lock root' '/home/liveuser'; do
+        for must in 'mkinitcpio.conf.d/archiso.conf' 'live-autologin' '10-simulationos-live' 'passwd --lock root' '/home/liveuser' \
+                    '49-simulationos-live-nopasswd.rules' 'vmlinuz-$pkgbase' 'pacman-key --init' 'getty@tty1.service.d/autologin.conf'; do
             grep -q -- "$must" "$DELOOP" \
                 || err "simulationos-deloop does not handle '$must'"
         done

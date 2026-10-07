@@ -51,5 +51,9 @@ file_permissions=(
   ["/usr/local/bin/simos-screenshot"]="0:0:755"
   ["/usr/local/bin/simos-powermenu"]="0:0:755"
   ["/usr/local/bin/simos-clipboard"]="0:0:755"
+  ["/usr/local/bin/simos-session"]="0:0:755"
+  ["/usr/local/bin/simos-wallpaper"]="0:0:755"
+  ["/usr/local/bin/simos-welcome"]="0:0:755"
   ["/usr/share/simulationos/calamares/scripts/simulationos-deloop"]="0:0:755"
+  ["/usr/share/simulationos/calamares/scripts/simulationos-verify-target"]="0:0:755"
 )

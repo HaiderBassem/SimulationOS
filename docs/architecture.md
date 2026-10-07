@@ -278,22 +278,49 @@ laptop setup and was replaced wholesale rather than patched. It contained:
 - both `monitor.conf` and `monitors.conf`, plus several config files that were
   shipped but never sourced
 
-**SIMULATIONOS DECISION:** one `hyprland.conf` plus a deliberately empty
-`monitors.conf` for per-machine overrides. Every `exec-once` and every keybind
-target maps to a package in `packages.x86_64` or to a script in
-`airootfs/usr/local/bin/`. Waybar uses **built-in modules only** — no custom
-scripts — so a missing helper can never blank the bar. One wallpaper daemon
-(`hyprpaper`), one launcher (`wofi`), one terminal (`kitty`), one file manager
-(`thunar`), one notification daemon (`mako`), one polkit agent
+**SIMULATIONOS DECISION:** one `hyprland.lua` (Hyprland >= 0.55 is configured
+in Lua; a legacy `hyprland.conf` produces a wall of config errors at login)
+plus a deliberately empty `user.lua` for personal overrides, loaded last
+through `pcall`. Every command the session starts maps to a package in
+`packages.x86_64` or to a script in `airootfs/usr/local/bin/`. One wallpaper
+daemon (`swaybg`), one launcher (`wofi`), one terminal (`kitty`), one file
+manager (`thunar`), one notification daemon (`mako`), one polkit agent
 (`hyprpolkitagent`) and one screen locker (`hyprlock`).
 
-The validator enforces all of this: sourced files must exist, exec targets must
-be shipped, the wallpaper must exist, only one wallpaper daemon may autostart,
-and `brightnessctl set 0%` is a hard error.
+Three things were learned by running the session instead of reading it:
 
-The wallpaper is a real generated asset
-(`airootfs/usr/share/backgrounds/simulationos/simulationos-alpha.png`,
-1920x1080), reproducible via `scripts/make-wallpaper.py`.
+- **Startup order.** Hyprland runs separate exec commands concurrently. The
+  session environment must reach D-Bus and the systemd user manager before
+  anything that depends on it, or D-Bus-activated services (mako, the polkit
+  agent, portals) start without `WAYLAND_DISPLAY` and fail. The whole
+  autostart is therefore one ordered script, `simos-session`.
+- **Wallpaper daemon.** `hyprpaper` >= 0.8 cannot allocate its buffers on
+  software-rendered machines (VMs without 3D acceleration) and segfaults.
+  `swaybg` uses plain shared memory and behaves the same everywhere.
+- **Keyboard.** The layout is read from `/etc/default/keyboard`, which the
+  installer writes, so the layout chosen at install time is the layout of the
+  session. It used to be hardcoded to `us`.
+
+Waybar uses built-in modules plus two custom ones that call shipped helpers:
+the power menu, and an "Install SimulationOS" button that hides itself once the
+installer has been removed from the installed system.
+
+The validator enforces this: no legacy `hyprland.conf`, required Lua modules
+must be shipped, every started command must be shipped, the session must go
+through `simos-session`, wallpapers and the fastfetch logo must exist, and
+`brightnessctl set 0%` is a hard error. The definitive check is Hyprland's own
+`--verify-config`, run against the built image in CI (`deloop-test.sh`), and
+`hyprctl configerrors` in the running session (`live-health.sh`,
+`install-test.py`).
+
+**Virtual machines.** Hyprland needs a DRM device it can create a renderer on.
+On a plain VGA adapter it starts and every process runs, but nothing is drawn.
+All VM tests therefore use virtio-gpu, and assert on the renderer and on the
+bar/wallpaper layers rather than on process names.
+
+The wallpapers, logos and the fastfetch logo are generated assets
+(`scripts/make-branding.py`): the SimOS wordmark as a dot matrix of binary
+digits, captioned with the name in ASCII binary.
 
 `.bashrc` was also fixed: it aliased `rm` to `trash-put` and `n` to `nvim`
 without shipping either, so `rm` was broken in the live session.

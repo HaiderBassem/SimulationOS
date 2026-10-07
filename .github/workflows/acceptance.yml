@@ -1,19 +1,33 @@
 # L4b/L5 - runtime acceptance of the built ISO on an x86_64 runner.
 #
-# Two jobs, deliberately separate so a live-desktop regression is
-# distinguishable from a security-cleanup regression:
+# Three jobs, deliberately separate so each regression class is
+# distinguishable at a glance:
 #
 #   live-health     boots the ISO, logs in on serial and asserts on RUNNING
-#                   state: graphical.target, SDDM, Hyprland, session
-#                   components, NetworkManager, DNS, PipeWire, portals.
-#   deloop-contract extracts the SquashFS, runs simulationos-deloop exactly as
-#                   Calamares does, and asserts the installed-system security
-#                   gates (liveuser gone, autologin gone, NOPASSWD gone, root
-#                   locked, archiso initramfs hook gone).
+#                   state: graphical.target, SDDM, Hyprland (including its own
+#                   config-error list), session components, NetworkManager,
+#                   DNS, PipeWire, portals, and that the installer can load.
+#   deloop-contract extracts the SquashFS and checks the image-level
+#                   contracts: Calamares libraries resolve, Hyprland's
+#                   verifier accepts the shipped config, simulationos-deloop
+#                   removes every live concession, and mkinitcpio produces a
+#                   normal (non-archiso) initramfs.
+#   install         the real thing: drives the graphical installer on the live
+#                   desktop, installs to a blank disk (UEFI + GPT + ext4 +
+#                   GRUB), powers off, boots the DISK ALONE twice and asserts
+#                   on the installed system.
+#
+# Manual runs: `gh workflow run acceptance.yml -f run_id=<iso run id>` tests
+# the ISO built by an earlier run, so harness changes do not need a rebuild.
 name: acceptance
 
 on:
   workflow_dispatch:
+    inputs:
+      run_id:
+        description: Run ID of the iso workflow whose ISO artifact should be tested
+        type: string
+        required: true
   workflow_call:
     inputs:
       artifact:
@@ -23,6 +37,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   live-health:
@@ -31,6 +46,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: Enable KVM
+        run: ./.github/enable-kvm.sh
       - name: Install QEMU and OVMF
         run: |
           sudo apt-get update -qq
@@ -38,13 +55,11 @@ jobs:
       - name: Download the ISO
         uses: actions/download-artifact@v4
         with:
-          name: ${{ inputs.artifact }}
+          pattern: ${{ inputs.artifact || 'simulationos-alpha-*' }}
           path: out
-      - name: KVM availability
-        run: |
-          # Hosted runners have no nested virtualisation; TCG is correct but
-          # slow. This is recorded so a timeout can be attributed correctly.
-          if [ -e /dev/kvm ]; then echo "KVM available"; else echo "no /dev/kvm -> TCG"; fi
+          merge-multiple: true
+          run-id: ${{ inputs.run_id || github.run_id }}
+          github-token: ${{ github.token }}
       - name: Live health checks
         env:
           SIMOS_LIVE_TIMEOUT: '2100'
@@ -58,7 +73,7 @@ jobs:
           if-no-files-found: ignore
 
   deloop-contract:
-    name: De-live security contract
+    name: Image contracts (installer, Hyprland, de-live, initramfs)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -70,7 +85,51 @@ jobs:
       - name: Download the ISO
         uses: actions/download-artifact@v4
         with:
-          name: ${{ inputs.artifact }}
+          pattern: ${{ inputs.artifact || 'simulationos-alpha-*' }}
           path: out
-      - name: Verify the de-live transformation
+          merge-multiple: true
+          run-id: ${{ inputs.run_id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify the image contracts
         run: sudo ./scripts/deloop-test.sh
+
+  install:
+    name: Install and boot (UEFI, GPT, ext4, GRUB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable KVM
+        run: ./.github/enable-kvm.sh
+      - name: Install QEMU, OVMF and OCR
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils ovmf tesseract-ocr tesseract-ocr-eng
+      - name: Download the ISO
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.artifact || 'simulationos-alpha-*' }}
+          path: out
+          merge-multiple: true
+          run-id: ${{ inputs.run_id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Install SimulationOS and boot the installed disk
+        run: ./scripts/install-test.py
+      - name: Acceptance matrix
+        if: always()
+        run: |
+          if [ -f out/install-test/summary.md ]; then
+            echo "### Installation acceptance" >> "$GITHUB_STEP_SUMMARY"
+            cat out/install-test/summary.md   >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload installation evidence (screenshots, logs, matrix)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installation-test-${{ github.sha }}
+          path: |
+            out/install-test/
+            !out/install-test/*.qcow2
+            !out/install-test/OVMF_VARS.fd
+          retention-days: 14
+          if-no-files-found: warn

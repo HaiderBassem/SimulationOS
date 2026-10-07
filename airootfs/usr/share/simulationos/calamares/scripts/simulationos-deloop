@@ -4,80 +4,144 @@
 # proper installed system.
 #
 # Runs INSIDE the target chroot, from Calamares' shellprocess@deloop instance,
-# after users/removeuser and BEFORE initcpiocfg/initcpio.
+# after removeuser and BEFORE initcpiocfg/initcpio.
 #
 # Why this exists: the offline installer copies the live SquashFS verbatim, so
 # the target initially inherits every live-medium concession - passwordless
-# root, NOPASSWD sudo, permissive polkit, SDDM autologin, tty autologin and the
-# archiso initramfs hooks. Each of those is removed here.
+# root, NOPASSWD sudo, permissive polkit, SDDM autologin, tty autologin, the
+# archiso initramfs configuration and an empty /boot. Each is corrected here.
 #
-# Deliberately NOT using `set -e`: a missing file must never abort a running
-# installation. Every step is individually guarded and logged.
+# Contract:
+#   - idempotent: running it twice gives the same result and still exits 0
+#   - a path that is already absent is not an error
+#   - a SECURITY- or BOOT-critical step that cannot be completed exits
+#     non-zero, which fails the installation loudly in Calamares instead of
+#     handing the user a half-cleaned system
 #
-
 set -u
 
-log() { printf '[deloop] %s\n' "$*"; }
+FAILED=0
+log()  { printf '[deloop] %s\n' "$*"; }
+fail() { printf '[deloop] ERROR: %s\n' "$*" >&2; FAILED=$((FAILED + 1)); }
 
+# Refuse to run against a live system: this script deletes accounts and
+# rewrites boot configuration. Calamares runs it in the target chroot, where
+# the archiso boot medium is not mounted.
+if [ "${SIMOS_DELOOP_FORCE:-0}" != "1" ] && [ -d /run/archiso/bootmnt/arch ]; then
+    printf '[deloop] ERROR: refusing to run on the live medium itself\n' >&2
+    exit 2
+fi
+
+# drop PATH... - remove live-only paths; absence is fine, failure is not.
 drop() {
     local path
     for path in "$@"; do
         if [ -e "$path" ] || [ -L "$path" ]; then
-            rm -rf -- "$path" && log "removed $path" || log "FAILED to remove $path"
+            if rm -rf -- "$path"; then log "removed $path"; else fail "could not remove $path"; fi
         fi
     done
 }
 
 log "starting live-configuration removal"
 
-# ---------------------------------------------------------------- 1. autologin
+# ------------------------------------------------------------- 1. live account
+# Calamares' removeuser has normally done this already; do not rely on it.
+if getent passwd liveuser >/dev/null 2>&1; then
+    userdel -f -r liveuser >/dev/null 2>&1 || userdel -f liveuser >/dev/null 2>&1
+    getent passwd liveuser >/dev/null 2>&1 && fail "liveuser account still exists"
+fi
+drop /home/liveuser /var/spool/mail/liveuser
+# Live-only groups (passwordless/auto login) and a stale primary group.
+for grp in nopasswdlogin autologin liveuser; do
+    if getent group "$grp" >/dev/null 2>&1; then
+        groupdel "$grp" >/dev/null 2>&1 || true
+    fi
+done
+# Calamares' users module recreates "autologin" on demand (users.conf).
+if grep -q '^liveuser:' /etc/passwd /etc/shadow 2>/dev/null; then
+    fail "liveuser still present in /etc/passwd or /etc/shadow"
+fi
+if grep -Eq '(^|[:,])liveuser(,|$)' /etc/group /etc/gshadow 2>/dev/null; then
+    sed -i -E 's/([:,])liveuser(,|$)/\1/; s/,$//' /etc/group /etc/gshadow \
+        || fail "could not strip liveuser from group files"
+fi
+
+# ---------------------------------------------------------------- 2. autologin
 # SDDM autologin and tty1 autologin are live-medium only.
 drop /etc/sddm.conf.d/20-simulationos-live-autologin.conf
 drop /etc/systemd/system/getty@tty1.service.d/autologin.conf
 rmdir /etc/systemd/system/getty@tty1.service.d 2>/dev/null
 
-# ------------------------------------------------------- 2. privilege policies
+# ------------------------------------------------------- 3. privilege policies
 # Replace live NOPASSWD sudo with a normal password-prompting wheel rule.
 drop /etc/sudoers.d/10-simulationos-live
 drop /etc/sudoers.d/g_wheel
+umask 077
 cat > /etc/sudoers.d/10-simulationos-wheel <<'EOSUDO'
 ## SimulationOS: members of the wheel group may use sudo after authenticating.
 %wheel ALL=(ALL:ALL) ALL
 EOSUDO
+umask 022
 chmod 0440 /etc/sudoers.d/10-simulationos-wheel
 chown 0:0 /etc/sudoers.d/10-simulationos-wheel
-if command -v visudo >/dev/null 2>&1; then
-    if visudo -cf /etc/sudoers.d/10-simulationos-wheel >/dev/null 2>&1; then
-        log "installed password-prompting wheel sudo rule"
-    else
-        log "FAILED sudoers validation; removing the new rule to avoid a broken sudo"
-        rm -f /etc/sudoers.d/10-simulationos-wheel
-    fi
+if visudo -c >/dev/null 2>&1; then
+    log "sudo policy: wheel must authenticate (visudo -c passed)"
+else
+    fail "visudo -c rejected the installed sudoers configuration"
+fi
+# Commented-out examples in the stock /etc/sudoers do not count.
+if grep -rhsE '^[^#]*NOPASSWD' /etc/sudoers /etc/sudoers.d >/dev/null; then
+    fail "a NOPASSWD sudo rule survived"
 fi
 
 # The live polkit rule grants every wheel member every action without a
 # password. That must not survive onto a real system.
 drop /etc/polkit-1/rules.d/49-simulationos-live-nopasswd.rules
 
-# ------------------------------------------------------------- 3. root account
-# The live medium ships root with an EMPTY password. Calamares is configured
-# with setRootPassword:false (sudo-only model), so lock root explicitly.
-if passwd --lock root >/dev/null 2>&1; then
+# ------------------------------------------------------------- 4. root account
+# archiso ships root with an empty password. Lock it: administration on the
+# installed system goes through sudo (users.conf: setRootPassword false).
+if passwd --lock root >/dev/null 2>&1 || usermod --lock root >/dev/null 2>&1; then
     log "locked the root account"
 else
-    log "WARNING: could not lock root via passwd; patching /etc/shadow directly"
-    sed -i 's/^root::/root:!:/' /etc/shadow 2>/dev/null \
-        && log "patched /etc/shadow" \
-        || log "FAILED to patch /etc/shadow"
+    sed -i -E 's/^root:[^:]*:/root:!:/' /etc/shadow || true
 fi
+case "$(awk -F: '$1=="root"{print $2}' /etc/shadow 2>/dev/null)" in
+    '!'*|'*'*) : ;;
+    *) fail "root account is not locked" ;;
+esac
 
-# ------------------------------------------------------------ 4. archiso layer
-# This is the load-bearing one: leaving archiso.conf in place makes mkinitcpio
-# build an archiso initramfs, and the installed system will not boot without
-# the ISO present.
+# ------------------------------------------------- 5. kernel image + initramfs
+# mkarchiso empties /boot inside the SquashFS (the ISO boots its own copy), so
+# the target starts with NO kernel in /boot. Install it exactly the way the
+# mkinitcpio pacman hook does: from /usr/lib/modules/<version>/vmlinuz, named
+# after the pkgbase. This does not depend on the boot medium still being
+# mounted (copytoram) and always matches the modules that were unpacked.
+kernels=0
+for moddir in /usr/lib/modules/*; do
+    [ -f "$moddir/vmlinuz" ] && [ -f "$moddir/pkgbase" ] || continue
+    read -r pkgbase < "$moddir/pkgbase"
+    if install -Dm644 "$moddir/vmlinuz" "/boot/vmlinuz-$pkgbase"; then
+        log "installed /boot/vmlinuz-$pkgbase from $moddir"
+        kernels=$((kernels + 1))
+    else
+        fail "could not install /boot/vmlinuz-$pkgbase"
+    fi
+done
+[ "$kernels" -gt 0 ] || fail "no kernel found under /usr/lib/modules"
+
+# The archiso drop-in replaces HOOKS with the live-medium set (memdisk,
+# archiso, archiso_loop_mnt). An initramfs built with it cannot mount a normal
+# root filesystem. It MUST be gone before Calamares runs initcpiocfg/initcpio.
 drop /etc/mkinitcpio.conf.d/archiso.conf
 rmdir /etc/mkinitcpio.conf.d 2>/dev/null
+if grep -rqs 'archiso' /etc/mkinitcpio.conf /etc/mkinitcpio.conf.d /etc/mkinitcpio.d; then
+    fail "archiso is still referenced by the mkinitcpio configuration"
+fi
+# Stale live initramfs images must never be mistaken for the installed one.
+drop /boot/initramfs-linux-cachyos.img /boot/initramfs-linux-cachyos-fallback.img
 
+# ------------------------------------------------------- 6. live-only services
 drop /etc/systemd/system/livecd-talk.service \
      /etc/systemd/system/livecd-alsa-unmuter.service \
      /etc/systemd/system/multi-user.target.wants/livecd-talk.service \
@@ -90,46 +154,85 @@ drop /etc/systemd/system/livecd-talk.service \
      /root/.automated_script.sh \
      /root/.zlogin
 
-# archiso masks the GPT auto-generator; an installed system wants it back.
+# Hypervisor guest agents are enabled unconditionally on the live medium so it
+# works in any VM. On an installed system they only make sense where the
+# matching hypervisor exists; elsewhere they are failed units on every boot.
+virt="$(systemd-detect-virt 2>/dev/null || echo none)"
+keep_guest=""
+case "$virt" in
+    oracle)    keep_guest="vboxservice.service" ;;
+    vmware)    keep_guest="vmtoolsd.service vmware-vmblock-fuse.service" ;;
+    microsoft) keep_guest="hv_fcopy_daemon.service hv_kvp_daemon.service hv_vss_daemon.service" ;;
+esac
+for unit in vboxservice.service vmtoolsd.service vmware-vmblock-fuse.service \
+            hv_fcopy_daemon.service hv_kvp_daemon.service hv_vss_daemon.service; do
+    case " $keep_guest " in *" $unit "*) continue ;; esac
+    drop "/etc/systemd/system/multi-user.target.wants/$unit"
+done
+log "hypervisor: $virt (kept guest units: ${keep_guest:-none})"
+
+# archiso masks systemd-gpt-auto-generator so the live medium never
+# auto-mounts host partitions. An installed system should use the default.
 if [ -L /etc/systemd/system-generators/systemd-gpt-auto-generator ]; then
     drop /etc/systemd/system-generators/systemd-gpt-auto-generator
     rmdir /etc/systemd/system-generators 2>/dev/null
 fi
 
-# Live-only systemd tuning: volatile journal and "never suspend".
+# Volatile journal storage is a live-medium choice (no persistent disk).
 drop /etc/systemd/journald.conf.d/volatile-storage.conf
 rmdir /etc/systemd/journald.conf.d 2>/dev/null
+
+# "Never suspend" is appropriate while installing, not on a real machine.
 drop /etc/systemd/logind.conf.d/do-not-suspend.conf
 rmdir /etc/systemd/logind.conf.d 2>/dev/null
 
-# sshd is not enabled on the live medium either, but clear any leftover
-# enablement and the upstream archiso drop-in if an older build left one.
+# The live medium waits for network time because pacman's keyring needs a sane
+# clock. An installed desktop must not: without a reachable time server the
+# unit times out and every boot ends "degraded". timesyncd itself stays enabled.
+drop /etc/systemd/system/sysinit.target.wants/systemd-time-wait-sync.service
+
+# sshd must not be enabled by default on an installed desktop.
 drop /etc/systemd/system/multi-user.target.wants/sshd.service \
      /etc/ssh/sshd_config.d/10-archiso.conf
 
-# ------------------------------------------------------------- 5. the live user
-# removeuser has already deleted the account; clear anything left behind.
-drop /home/liveuser
-for grp in nopasswdlogin autologin; do
-    if command -v gpasswd >/dev/null 2>&1; then
-        gpasswd -d liveuser "$grp" >/dev/null 2>&1
+# ------------------------------------------------------------ 7. pacman keyring
+# On the live medium /etc/pacman.d/gnupg is a tmpfs filled at boot by
+# pacman-init.service (both removed above). The installed system needs a real
+# keyring or every signed package would be rejected. Signature checking is
+# never relaxed instead.
+if [ ! -s /etc/pacman.d/gnupg/pubring.gpg ] && [ ! -s /etc/pacman.d/gnupg/pubring.kbx ]; then
+    rm -rf /etc/pacman.d/gnupg
+    if pacman-key --init >/dev/null 2>&1 \
+        && pacman-key --populate archlinux cachyos >/dev/null 2>&1; then
+        log "initialised the pacman keyring (archlinux, cachyos)"
+    else
+        fail "could not initialise the pacman keyring"
     fi
-done
+    # gpg-agent/dirmngr started by pacman-key would keep the target busy at umount.
+    gpgconf --homedir /etc/pacman.d/gnupg --kill all >/dev/null 2>&1 || true
+else
+    log "pacman keyring already present"
+fi
 
-# --------------------------------------------------------------- 6. installer
-# The installer must not be offered from an installed system. The
-# cachyos-calamares package itself is removed by the `packages` module;
-# /usr/share/simulationos is removed by the command after this script.
+# ------------------------------------------------------- 8. installer leftovers
+# The launcher is removed now; the Calamares configuration and its library
+# compatibility directory are removed by shellprocess@verify, once the last
+# job that needs them has run.
 drop /usr/local/bin/simulationos-install \
-     /usr/share/applications/simulationos-install.desktop
+     /usr/share/applications/simulationos-install.desktop \
+     /root/.cache/calamares
+find /home /root -maxdepth 2 -name 'simulationos-install*.log' -delete 2>/dev/null
 
-# ------------------------------------------------------------------ 7. banners
-# Replace the live console banner with an installed-system one.
+# ---------------------------------------------------------------------- 9. motd
 cat > /etc/motd <<'EOMOTD'
 
   SimulationOS
 
 EOMOTD
 
+if [ "$FAILED" -gt 0 ]; then
+    printf '[deloop] FAILED: %s critical step(s) could not be completed\n' "$FAILED" >&2
+    exit 1
+fi
 log "finished live-configuration removal"
 exit 0

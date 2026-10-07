@@ -114,6 +114,13 @@ rm -rf -- "$_case_probe"
 green "    work directory is case-sensitive"
 
 # -------------------------------------------------------------------- 5. build
+# cachyos-calamares is ABI-coupled to one exact Boost release. When Arch moves
+# Boost ahead of the CachyOS rebuild the installer cannot even start, while the
+# ISO builds and boots normally. Detect that now and stage the (signature
+# verified) libraries the installer needs - or fail the build.
+"$REPO/scripts/calamares-compat.sh" \
+    || die "calamares-compat.sh failed: the installer in this ISO would not start."
+
 info "Running mkarchiso (this takes a while and needs ~20 GB free)"
 BUILD_LOG="$OUT/build.log"
 BUILD_START="$(date -u +%s)"

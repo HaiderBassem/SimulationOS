@@ -24,15 +24,15 @@ strings:
     releaseNotesUrl:        "https://github.com/HaiderBassem/SimulationOS"
 
 images:
-    productLogo:    "logo.svg"
-    productIcon:    "icon.svg"
-    productWelcome: "logo.svg"
+    productLogo:    "logo.png"
+    productIcon:    "icon.png"
+    productWelcome: "welcome.png"
 
 slideshow:    "show.qml"
 slideshowAPI: 2
 
 style:
-    sidebarBackground:    "#14161a"
-    sidebarText:          "#e6e6e6"
-    sidebarTextSelect:    "#1793d1"
-    sidebarTextHighlight: "#33ccff"
+    SidebarBackground:        "#0b0e13"
+    SidebarText:              "#e6e6e6"
+    SidebarTextCurrent:       "#0b0e13"
+    SidebarBackgroundCurrent: "#33ccff"

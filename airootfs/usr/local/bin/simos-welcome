@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# SimulationOS session greeting, started once per Hyprland session.
+#
+# On the live medium it tells the user how to install; on an installed system
+# it shows the essential shortcuts the first time a user logs in.
+set -u
+
+# Wait for the notification daemon rather than racing it.
+for _ in $(seq 1 50); do
+    busctl --user status org.freedesktop.Notifications >/dev/null 2>&1 && break
+    sleep 0.2
+done
+
+if [ -x /usr/local/bin/simulationos-install ]; then
+    notify-send -a SimulationOS -i simulationos -t 20000 \
+        "Welcome to SimOS (live session)" \
+        "Click 'Install SimulationOS' in the top bar to install.
+Super+Return terminal  ·  Super+D apps  ·  Super+W wallpaper"
+    exit 0
+fi
+
+stamp="${XDG_STATE_HOME:-$HOME/.local/state}/simulationos/welcomed"
+[ -e "$stamp" ] && exit 0
+mkdir -p "$(dirname "$stamp")" && : > "$stamp"
+notify-send -a SimulationOS -i simulationos -t 20000 \
+    "Welcome to SimOS" \
+    "Super+Return terminal  ·  Super+D apps  ·  Super+E files
+Super+W wallpaper  ·  Super+X power menu  ·  Super+Q close window"

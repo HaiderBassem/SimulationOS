@@ -72,3 +72,17 @@ window#waybar {
 #battery.warning {
   color: #f0c674;
 }
+
+/* Live medium only: the primary call to action. */
+#custom-install {
+    background: #1793d1;
+    color: #0b0e13;
+    font-weight: bold;
+    padding: 0 14px;
+    margin: 4px 6px 4px 4px;
+    border-radius: 6px;
+}
+
+#custom-install:hover {
+    background: #33ccff;
+}

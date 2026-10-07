@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# SimulationOS wallpaper.
+#
+#   simos-wallpaper start       show the selected wallpaper (session startup)
+#   simos-wallpaper next        cycle to the next shipped wallpaper (Super+W)
+#   simos-wallpaper <name>      throne | winter | fire
+#   simos-wallpaper list
+#
+# The wallpaper is drawn by swaybg. It was chosen over hyprpaper on purpose:
+# swaybg uses plain shared-memory buffers, so it works identically on real
+# GPUs and on software-rendered machines (VMs without 3D acceleration), where
+# hyprpaper >= 0.8 cannot allocate its buffers and crashes.
+#
+# The selection is stored per user and survives re-login.
+set -euo pipefail
+
+DIR=/usr/share/backgrounds/simulationos
+STATE="${XDG_CONFIG_HOME:-$HOME/.config}/simulationos/wallpaper"
+NAMES=(throne winter fire)
+
+current="$(cat "$STATE" 2>/dev/null || true)"
+[ -f "$DIR/simos-$current.png" ] || current="${NAMES[0]}"
+
+case "${1:-next}" in
+    list)  printf '%s\n' "${NAMES[@]}"; exit 0 ;;
+    start) want="$current" ;;
+    next)
+        want="${NAMES[0]}"
+        for i in "${!NAMES[@]}"; do
+            if [ "${NAMES[$i]}" = "$current" ]; then
+                want="${NAMES[$(( (i + 1) % ${#NAMES[@]} ))]}"
+            fi
+        done ;;
+    *) want="$1" ;;
+esac
+
+path="$DIR/simos-$want.png"
+[ -f "$path" ] || { printf 'simos-wallpaper: no such wallpaper: %s\n' "$want" >&2; exit 1; }
+
+mkdir -p "$(dirname "$STATE")"
+printf '%s\n' "$want" > "$STATE"
+
+# Start the new instance before stopping the old one, so the screen never
+# flashes to an empty background.
+old="$(pgrep -u "$(id -u)" -x swaybg || true)"
+setsid -f swaybg -m fill -i "$path" >/dev/null 2>&1
+if [ -n "$old" ]; then
+    sleep 0.6
+    # shellcheck disable=SC2086  # a list of PIDs
+    kill $old 2>/dev/null || true
+fi

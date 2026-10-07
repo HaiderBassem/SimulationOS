@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# SimulationOS session startup, run once by Hyprland (hyprland.lua).
+#
+# Everything is started from ONE script because order matters and Hyprland
+# runs separate exec commands concurrently:
+#
+#   1. export the session environment to D-Bus and the systemd user manager
+#      and WAIT for that to finish. Services activated before this point
+#      (notification daemon, polkit agent, portals) start without
+#      WAYLAND_DISPLAY and fail - which is exactly what an unordered
+#      autostart list does on a slow machine.
+#   2. only then start the desktop components.
+#
+# Every command here is provided by packages.x86_64 or airootfs/usr/local/bin.
+set -u
+
+dbus-update-activation-environment --systemd \
+    WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE HYPRLAND_INSTANCE_SIGNATURE
+# Units that failed in an earlier session (e.g. after a compositor restart)
+# must be allowed to start again.
+systemctl --user reset-failed mako.service hyprpolkitagent.service 2>/dev/null
+
+start() { setsid -f "$@" >/dev/null 2>&1; }
+
+start simos-wallpaper start
+start waybar
+start mako
+systemctl --user start hyprpolkitagent.service
+start nm-applet --indicator
+start blueman-applet
+start wl-paste --watch cliphist store
+# First-session greeting (and, on the live medium, how to install).
+start simos-welcome

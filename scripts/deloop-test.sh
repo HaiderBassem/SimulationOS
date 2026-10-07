@@ -10,8 +10,13 @@
 #
 # This extracts the SquashFS from the real ISO, runs deloop inside it exactly
 # as Calamares would, and asserts the security properties of the result. It
-# covers the same gates as the post-install checks without needing to drive
-# the graphical installer.
+# then builds the initramfs the way the installer does and proves it is a
+# normal one. Finally it checks, against the real binaries in the image, that
+# the installer can load its libraries and that the shipped Hyprland
+# configuration is valid.
+#
+# It complements install-test.py (the real graphical installation): this runs
+# in a couple of minutes and pinpoints which contract broke.
 #
 set -uo pipefail
 
@@ -36,7 +41,29 @@ case "$WORK" in
     *) red "refusing to use work directory $WORK (must be under /var/tmp or /tmp)"; exit 1 ;;
 esac
 
-rm -rf -- "$WORK"
+# remove_workdir - delete the scratch directory, but NEVER while anything is
+# mounted beneath it. A recursive delete that crosses a leftover bind mount of
+# /dev or /sys would reach into the host. So: stop processes still rooted in
+# the chroot, unmount, verify with findmnt, and refuse to delete otherwise.
+# --one-file-system is the second line of defence.
+remove_workdir() {
+    [ -d "$WORK" ] || return 0
+    local pid mp
+    for pid in $(find /proc -maxdepth 2 -name root -lname "$WORK/root*" 2>/dev/null | cut -d/ -f3); do
+        kill -9 "$pid" 2>/dev/null
+    done
+    findmnt -rno TARGET 2>/dev/null | grep -F "$WORK/" | sort -r | while read -r mp; do
+        umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null
+    done
+    if findmnt -rno TARGET 2>/dev/null | grep -qF "$WORK/"; then
+        red "refusing to delete $WORK: filesystems are still mounted beneath it:"
+        findmnt -rno TARGET | grep -F "$WORK/" >&2
+        return 1
+    fi
+    rm -rf --one-file-system -- "$WORK"
+}
+
+remove_workdir || exit 1
 mkdir -p "$WORK/root"
 
 info "Extracting the SquashFS from $(basename "$ISO")"
@@ -63,30 +90,98 @@ check_pre "archiso initramfs hook"   "[ -f '$R/etc/mkinitcpio.conf.d/archiso.con
 check_pre "root has empty password"  "grep -q '^root::' '$R/etc/shadow'"
 check_pre "liveuser account"         "grep -q '^liveuser:' '$R/etc/passwd'"
 check_pre "installer launcher"       "[ -x '$R/usr/local/bin/simulationos-install' ]"
+check_pre "/boot empty in the SquashFS" "[ -z \"\$(ls -A '$R/boot' 2>/dev/null)\" ]"
 [ "$pre_bad" -eq 0 ] || { red "extracted rootfs is not in the expected live state"; exit 1; }
+
+ERRORS=0
+gate() { if eval "$2"; then green "  ok      $1"; else red "  FAILED  $1"; ERRORS=$((ERRORS+1)); fi; }
+inroot() { chroot "$R" /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/bin HOME=/root "$@"; }
+
+# API filesystems for the chroot. Deliberately NOT bind mounts of the host's
+# /dev and /sys: /proc and /sys are fresh instances (sysfs read-only), and
+# /dev is a private tmpfs holding only the nodes the tools need. Nothing the
+# chroot - or a cleanup gone wrong - does there can touch the host's devices.
+mount -t proc proc "$R/proc"
+mount -t sysfs -o ro sysfs "$R/sys"
+mount -t tmpfs -o mode=755,nosuid tmpfs "$R/dev"
+mknod -m 666 "$R/dev/null" c 1 3
+mknod -m 666 "$R/dev/zero" c 1 5
+mknod -m 666 "$R/dev/full" c 1 7
+mknod -m 666 "$R/dev/random" c 1 8
+mknod -m 666 "$R/dev/urandom" c 1 9
+mknod -m 666 "$R/dev/tty" c 5 0
+ln -s /proc/self/fd "$R/dev/fd"
+ln -s /proc/self/fd/0 "$R/dev/stdin"
+ln -s /proc/self/fd/1 "$R/dev/stdout"
+ln -s /proc/self/fd/2 "$R/dev/stderr"
+mkdir -p "$R/dev/shm" "$R/dev/pts"
+trap 'remove_workdir' EXIT
+
+# ------------------------------------------------- live medium: installer runs
+# Checked BEFORE deloop, against the image exactly as the live session sees it.
+printf '\n== installer and desktop contracts (live image)\n'
+COMPAT=/usr/lib/simulationos/calamares-compat
+CALDIR=/usr/share/simulationos/calamares
+ELFS="/usr/bin/calamares $(cd "$R" && find usr/lib -maxdepth 1 -name 'libcalamares*.so' -printf '/%p ' 2>/dev/null) $(cd "$R" && find usr/lib/calamares/modules -name '*.so' -printf '/%p ' 2>/dev/null)"
+MISSING="$(for f in $ELFS; do inroot env LD_LIBRARY_PATH="$COMPAT" ldd "$f" 2>/dev/null; done | awk '/not found/{print $1}' | sort -u | tr '\n' ' ')"
+gate "Calamares and every module resolve their libraries${MISSING:+ (missing: $MISSING)}" "[ -z '$MISSING' ]"
+# Checked inside the image: qml is an absolute symlink into /usr/share/calamares.
+gate "Calamares config has a qml directory"   "inroot test -d '$CALDIR/qml/.'"
+for mod in $(sed -n '/^sequence:/,/^branding:/p' "$R$CALDIR/settings.conf" \
+             | grep -E '^[[:space:]]+-[[:space:]]' | sed 's/^[[:space:]]*-[[:space:]]*//; s/@.*//' | sort -u); do
+    gate "Calamares module '$mod' exists in the package" "[ -d '$R/usr/lib/calamares/modules/$mod' ]"
+done
+gate "helper scripts are executable" \
+    "[ -x '$R/usr/local/bin/simulationos-install' ] && [ -x '$R/usr/local/bin/simos-welcome' ] && [ -x '$R/usr/local/bin/simos-wallpaper' ] && [ -x '$R$CALDIR/scripts/simulationos-verify-target' ]"
+
+# Hyprland's own verifier, run on the configuration a new user receives.
+mkdir -p "$R/tmp/hyprcheck/.config" "$R/tmp/hyprcheck/run"
+cp -a "$R/etc/skel/.config/hypr" "$R/tmp/hyprcheck/.config/"
+chmod 700 "$R/tmp/hyprcheck/run"
+HYPR_OUT="$(inroot env HOME=/tmp/hyprcheck XDG_RUNTIME_DIR=/tmp/hyprcheck/run \
+            Hyprland --i-am-really-stupid --verify-config 2>&1 | sed -n '/Config parsing result/,$p')"
+printf '%s\n' "$HYPR_OUT" | sed 's/^/    /'
+gate "Hyprland --verify-config reports 'config ok'" "printf '%s' \"\$HYPR_OUT\" | grep -q 'config ok'"
+rm -rf "$R/tmp/hyprcheck"
+FF_OUT="$(inroot env TERM=xterm-256color fastfetch --pipe false 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
+if ! printf '%s' "$FF_OUT" | grep -q '01010011 01101001 01101101 01001111 01010011'; then
+    printf '%s\n' "$FF_OUT" | head -12 | sed 's/^/    /'
+fi
+gate "fastfetch renders the SimOS logo" \
+    "printf '%s' \"\$FF_OUT\" | grep -q '01010011 01101001 01101101 01001111 01010011'"
 
 # ----------------------------------------------------------- run the transform
 info "Running simulationos-deloop inside the chroot (as Calamares does)"
-for m in proc sys dev; do mount --rbind "/$m" "$R/$m" 2>/dev/null; done
 # Calamares removes the live account first (removeuser module); mirror that.
 chroot "$R" /usr/bin/userdel -r liveuser >/dev/null 2>&1 || true
 chroot "$R" "$DELOOP" 2>&1 | sed 's/^/    /'
 DELOOP_RC=${PIPESTATUS[0]}
-for m in dev sys proc; do umount -R "$R/$m" 2>/dev/null; done
 [ "$DELOOP_RC" -eq 0 ] || { red "deloop exited $DELOOP_RC"; exit 1; }
+# Idempotence: a second run must change nothing and still succeed.
+chroot "$R" "$DELOOP" >/dev/null 2>&1
+DELOOP_RC2=$?
+
+info "Building the installed-system initramfs (mkinitcpio -P, as Calamares' initcpio does)"
+chroot "$R" /usr/bin/mkinitcpio -P 2>&1 | grep -E 'ERROR|WARNING|Image generation|Initcpio image' | sed 's/^/    /'
+MKINIT_RC=${PIPESTATUS[0]}
 
 # ------------------------------------------------------------------ acceptance
 printf '\n== installed-system acceptance gates\n'
-ERRORS=0
-gate() { if eval "$2"; then green "  ok      $1"; else red "  FAILED  $1"; ERRORS=$((ERRORS+1)); fi; }
-
+gate "deloop is idempotent (second run exits 0)" "[ '$DELOOP_RC2' -eq 0 ]"
+gate "kernel installed to /boot"              "[ -s '$R/boot/vmlinuz-linux-cachyos' ]"
+gate "mkinitcpio -P succeeded"                "[ '$MKINIT_RC' -eq 0 ]"
+gate "initramfs generated"                    "[ -s '$R/boot/initramfs-linux-cachyos.img' ]"
+gate "initramfs contains no archiso hook"     "! chroot '$R' /usr/bin/lsinitcpio /boot/initramfs-linux-cachyos.img 2>/dev/null | grep -q archiso"
+gate "pacman keyring initialised"             "[ -s '$R/etc/pacman.d/gnupg/pubring.gpg' ] || [ -s '$R/etc/pacman.d/gnupg/pubring.kbx' ]"
+gate "sudoers configuration valid (visudo -c)" "chroot '$R' /usr/bin/visudo -c >/dev/null 2>&1"
+gate "liveuser absent from group files"       "! grep -Eq '(^|[:,])liveuser(,|\$)' '$R/etc/group' '$R/etc/gshadow'"
 gate "liveuser removed from /etc/passwd"      "! grep -q '^liveuser:' '$R/etc/passwd'"
 gate "/home/liveuser removed"                 "[ ! -d '$R/home/liveuser' ]"
 gate "SDDM live autologin removed"            "[ ! -f '$R/etc/sddm.conf.d/20-simulationos-live-autologin.conf' ]"
 gate "tty1 autologin drop-in removed"         "[ ! -f '$R/etc/systemd/system/getty@tty1.service.d/autologin.conf' ]"
 gate "NOPASSWD sudoers removed"               "[ ! -f '$R/etc/sudoers.d/10-simulationos-live' ]"
 gate "password-prompting wheel rule added"    "grep -q '^%wheel ALL=(ALL:ALL) ALL' '$R/etc/sudoers.d/10-simulationos-wheel'"
-gate "no NOPASSWD rule left in sudoers.d"     "! grep -rq 'NOPASSWD' '$R/etc/sudoers.d/'"
+gate "no active NOPASSWD rule in sudoers"     "! grep -rhsE '^[^#]*NOPASSWD' '$R/etc/sudoers' '$R/etc/sudoers.d/' >/dev/null"
 gate "permissive polkit rule removed"         "[ ! -f '$R/etc/polkit-1/rules.d/49-simulationos-live-nopasswd.rules' ]"
 gate "root account locked"                    "grep -qE '^root:[!*]' '$R/etc/shadow'"
 gate "root no longer has an empty password"   "! grep -q '^root::' '$R/etc/shadow'"
@@ -98,10 +193,13 @@ gate "installer desktop entry removed"        "[ ! -e '$R/usr/share/applications
 gate "display-manager still enabled"          "[ -L '$R/etc/systemd/system/display-manager.service' ]"
 gate "default.target still graphical"         "readlink '$R/etc/systemd/system/default.target' | grep -q graphical"
 gate "SimulationOS identity intact"           "grep -q 'ID=simulationos' '$R/etc/os-release'"
-gate "desktop skel intact for new users"      "[ -f '$R/etc/skel/.config/hypr/hyprland.conf' ]"
+gate "desktop skel intact for new users"      "[ -f '$R/etc/skel/.config/hypr/hyprland.lua' ] && [ -f '$R/etc/skel/.config/waybar/config.jsonc' ]"
+gate "SimOS wallpapers and logo kept"         "[ -f '$R/usr/share/backgrounds/simulationos/simos-throne.png' ] && [ -f '$R/usr/share/simulationos/fastfetch/logo.txt' ]"
+gate "NetworkManager still enabled"           "[ -L '$R/etc/systemd/system/multi-user.target.wants/NetworkManager.service' ]"
 
 printf '\n'
-rm -rf -- "$WORK"
+trap - EXIT
+remove_workdir || ERRORS=$((ERRORS + 1))
 if [ "$ERRORS" -gt 0 ]; then
     red "DELOOP CONTRACT FAILED: $ERRORS gate(s)"
     exit 1
