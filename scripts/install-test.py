@@ -1029,11 +1029,30 @@ def phase_boot(args, res, outdir, T):
         # ============================================================ power off
         if serial_ok:
             g.sh(f"printf '%s\\n' '{TEST_PASS}' | sudo -S -p '' -v")
-            g.serial.send("sudo -n systemctl poweroff")
+            # The command is typed blind into the serial shell. A run once saw no
+            # sign of shutdown at all (desktop untouched), so a lost command is
+            # told apart from a hung shutdown: look at the guest, then send it
+            # again. A retry is reported, so it cannot hide a real problem.
             t_off = time.time()
-            off = g.vm.wait_exit(T.shutdown * 3)
-            res.set("shutdown", off, f"systemctl poweroff completed; the VM exited by itself after {time.time() - t_off:.0f}s"
-                    if off else f"the VM was still running {T.shutdown * 3}s after 'systemctl poweroff'")
+            off, tries = False, 0
+            for budget in (T.shutdown, T.shutdown * 2):
+                tries += 1
+                g.serial.send("sudo -n systemctl poweroff")
+                off = g.vm.wait_exit(budget)
+                if off:
+                    break
+                log(f"    the VM was still running {budget}s after 'systemctl poweroff' (attempt {tries})")
+                try:
+                    rc, out = g.sh("uptime -p; systemctl list-jobs --no-pager | head -n 8; "
+                                   "journalctl -n 12 --no-pager -o short-monotonic | cut -c1-170", 30)
+                    for ln in lines(out):
+                        log("    guest: " + ln)
+                except Exception as e:
+                    log(f"    the guest shell did not answer ({e})")
+            took = f"{time.time() - t_off:.0f}s"
+            res.set("shutdown", off, (f"systemctl poweroff completed; the VM exited by itself after {took}" if tries == 1 else
+                                      f"the VM only powered off after 'systemctl poweroff' was sent again ({took})")
+                    if off else f"the VM was still running {took} after 'systemctl poweroff' (sent {tries} times)")
     finally:
         try:
             sc.shot("installed-final")
